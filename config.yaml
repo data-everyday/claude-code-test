@@ -1,0 +1,25 @@
+# BigQuery & Looker 自動分析ツール設定ファイル
+# 使用前にこのファイルを編集してください
+
+gcp:
+  project_id: "your-gcp-project-id"         # GCPプロジェクトID
+  region: "asia-northeast1"                   # リージョン（東京）
+
+gcs:
+  bucket_name: "your-gcs-bucket-name"        # GCSバケット名
+  adid_folder: "adid_lists"                  # adidリストを格納するフォルダ
+
+bigquery:
+  dataset_id: "adid_analysis"                # BQデータセットID
+  adid_table_id: "adid_list"                 # adidテーブルID
+  result_table_id: "analysis_result"         # 分析結果テーブルID
+  location: "asia-northeast1"                # BQロケーション
+
+looker:
+  base_url: "https://your-looker-instance.looker.com"  # LookerインスタンスURL
+  client_id: "your-looker-client-id"         # Looker APIクライアントID
+  client_secret: "your-looker-client-secret" # Looker APIクライアントシークレット
+  model_name: "your_model"                   # Lookerモデル名
+  explore_name: "adid_analysis"              # Looker Explore名
+  look_title: "ADID分析レポート"              # Lookのタイトル
+  folder_id: "1"                             # LookerフォルダID（数字）
