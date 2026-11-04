@@ -3,3 +3,11 @@ google-cloud-bigquery>=3.11.0
 looker-sdk>=23.0.0
 pyyaml>=6.0
 pandas>=2.0.0
+
+# MMM（ベイズ Marketing Mix Model）
+pymc>=5.10
+arviz>=0.17
+scipy>=1.10
+matplotlib>=3.7
+h5netcdf>=1.2      # 事後サンプル(posterior.nc)の保存用
+pytest>=7.0

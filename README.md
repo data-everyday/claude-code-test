@@ -2,6 +2,8 @@
 
 GCSへのadidリストアップロードから、BigQueryでの分析、Lookerでの可視化まで自動化するツールです。
 
+> **ベイズ MMM（Marketing Mix Model）自動分析ツール** は [MMM_README.md](MMM_README.md) を参照してください（`python -m mmm run --config mmm_config.yaml`）。
+
 ## ファイル構成
 
 ```
