@@ -10,4 +10,5 @@ arviz>=0.17
 scipy>=1.10
 matplotlib>=3.7
 h5netcdf>=1.2      # 事後サンプル(posterior.nc)の保存用
+numpyro>=0.15      # 高速サンプラー（JAX）。nuts_sampler: auto で自動使用
 pytest>=7.0

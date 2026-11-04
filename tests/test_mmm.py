@@ -163,3 +163,42 @@ def test_halfnormal_fallback_positive(tmp_path):
     md = build_model_data(validate_dataframe(df, cfg), cfg)
     fit = BayesianMMM(cfg, md).fit()
     assert (fit.posterior["beta"] > 0).all()
+
+
+def test_speed_preset_and_overrides(tmp_path):
+    from mmm.config import parse_overrides
+
+    path = _write_cfg(tmp_path)
+    cfg = load_config(path, parse_overrides(["sampler.speed=fast", "sampler.draws=",
+                                             "validation.holdout_weeks=0"]))
+    # テスト用 config は draws=60 を明示 → 空値で上書きするとプリセット(fast=500)が効く
+    assert cfg.sampler["draws"] == 500 and cfg.sampler["chains"] == 1
+    assert cfg.holdout_weeks == 0
+    assert cfg.sampler["nuts_sampler"] in {"numpyro", "nutpie", "pymc"}
+    with pytest.raises(ValueError, match="sampler.speed"):
+        load_config(path, {"sampler.speed": "turbo"})
+    with pytest.raises(ValueError, match="key=value"):
+        parse_overrides(["oops"])
+
+
+def test_colab_build_config(tmp_path):
+    from mmm.colab import build_config, parse_channels, parse_controls, parse_multipliers, save_yaml
+
+    assert parse_channels("tv：tv_spend：delayed、 search") == [
+        {"name": "tv", "column": "tv_spend", "adstock": "delayed"},
+        {"name": "search", "column": "search", "adstock": "geometric"}]
+    assert parse_controls("") == []
+    assert parse_multipliers("tv:1.5, social:0.8") == {"tv": 1.5, "social": 0.8}
+    with pytest.raises(ValueError, match="adstock"):
+        parse_channels("tv:tv_spend:weird")
+
+    csv = tmp_path / "d.csv"
+    generate(60).to_csv(csv, index=False)
+    kw = dict(csv_path=str(csv), date_column="date", target_column="sales",
+              channels="tv:tv_spend:delayed, search:search_spend", controls="price:negative")
+    d = build_config(**kw)
+    cfg = load_config(save_yaml(d, str(tmp_path / "c.yaml")))
+    assert [c.name for c in cfg.channels] == ["tv", "search"]
+    assert cfg.sampler["draws"] == 500  # fast プリセット
+    with pytest.raises(ValueError, match="CSV にない列名"):
+        build_config(**{**kw, "target_column": "revenue"})

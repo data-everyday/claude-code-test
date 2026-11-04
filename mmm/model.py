@@ -16,6 +16,7 @@ y_scaled[t] = intercept + trend + seasonality + controls
 from __future__ import annotations
 
 import logging
+import time
 from dataclasses import dataclass
 
 import numpy as np
@@ -184,8 +185,9 @@ class BayesianMMM:
             train_mask = np.ones(len(self.md.y), dtype=bool)
         model = self.build(train_mask)
         s = self.cfg.sampler
-        log.info("サンプリング開始: draws=%s tune=%s chains=%s (学習 %d 週)",
-                 s["draws"], s["tune"], s["chains"], int(train_mask.sum()))
+        log.info("サンプリング開始: sampler=%s draws=%s tune=%s chains=%s (学習 %d 週)",
+                 s["nuts_sampler"], s["draws"], s["tune"], s["chains"], int(train_mask.sum()))
+        t0 = time.time()
         with model:
             idata = pm.sample(
                 draws=int(s["draws"]),
@@ -196,6 +198,7 @@ class BayesianMMM:
                 nuts_sampler=s.get("nuts_sampler", "pymc"),
                 progressbar=bool(s.get("progressbar", True)),
             )
+        log.info("サンプリング完了: %.0f 秒", time.time() - t0)
         posterior = self._flatten(idata)
         diagnostics = compute_diagnostics(idata, posterior)
         return FitResult(idata, posterior, train_mask, diagnostics)

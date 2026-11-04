@@ -19,11 +19,17 @@ def main(argv=None) -> int:
     p_run.add_argument("--draws", type=int, help="config の sampler.draws を上書き")
     p_run.add_argument("--tune", type=int, help="config の sampler.tune を上書き")
     p_run.add_argument("--chains", type=int, help="config の sampler.chains を上書き")
+    p_run.add_argument("--speed", choices=["fast", "standard", "precise"],
+                       help="計算量プリセット（fast=試行用 / standard / precise=最終報告用）")
+    for p in (p_run,):
+        p.add_argument("--set", action="append", metavar="KEY=VALUE",
+                       help="config の任意の値を上書き（複数可）。例: --set validation.holdout_weeks=0")
 
     p_sim = sub.add_parser("simulate", help="保存済みの推定結果でシナリオを試算（再推定なし）")
     p_sim.add_argument("--config", default="mmm_config.yaml")
     p_sim.add_argument("--scenario-file", help="scenarios を記述した YAML（省略時は config の scenarios）")
     p_sim.add_argument("--posterior", help="posterior.nc のパス（省略時は output.dir/posterior.nc）")
+    p_sim.add_argument("--set", action="append", metavar="KEY=VALUE", help="config の任意の値を上書き")
 
     p_s = sub.add_parser("sample-data", help="動作確認用の合成データを生成")
     p_s.add_argument("--out", default="data/sample_mmm.csv")
@@ -43,17 +49,20 @@ def main(argv=None) -> int:
         print(f"サンプルデータを出力: {args.out}")
         return 0
 
-    from .config import load_config
+    from .config import load_config, parse_overrides
 
-    cfg = load_config(args.config)
+    overrides = parse_overrides(args.set)
+    if getattr(args, "speed", None):
+        overrides["sampler.speed"] = args.speed
+    for k in ("draws", "tune", "chains"):
+        if getattr(args, k, None) is not None:
+            overrides[f"sampler.{k}"] = getattr(args, k)
+    cfg = load_config(args.config, overrides)
     if args.cmd == "simulate":
         return _simulate(cfg, args)
 
     from .pipeline import run
 
-    for k in ("draws", "tune", "chains"):
-        if getattr(args, k) is not None:
-            cfg.sampler[k] = getattr(args, k)
     result = run(cfg)
     print(result["summary"][["channel", "spend", "contribution_mean", "roi_mean", "roi_lo",
                              "roi_hi", "marginal_roi"]].to_string(index=False))

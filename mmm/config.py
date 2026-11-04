@@ -62,10 +62,56 @@ def _get(d: dict, path: str, default=None):
     return cur
 
 
-def load_config(path: str | Path) -> Config:
+SPEED_PRESETS = {
+    # 試行錯誤用。数分で終わるが、収束警告が出やすい
+    "fast": {"draws": 500, "tune": 500, "chains": 2},
+    # 通常
+    "standard": {"draws": 1000, "tune": 1000, "chains": 4},
+    # 最終報告用。時間はかかるが推定が安定
+    "precise": {"draws": 2000, "tune": 2000, "chains": 4},
+}
+
+
+def parse_overrides(items: list[str] | None) -> dict[str, Any]:
+    """["sampler.draws=300", "validation.holdout_weeks=0"] -> {"sampler.draws": 300, ...}"""
+    out = {}
+    for item in items or []:
+        if "=" not in item:
+            raise ValueError(f"--set は key=value 形式で指定してください: {item}")
+        key, val = item.split("=", 1)
+        out[key.strip()] = yaml.safe_load(val) if val.strip() else None
+    return out
+
+
+def apply_overrides(raw: dict, overrides: dict[str, Any]) -> dict:
+    for key, val in overrides.items():
+        cur = raw
+        parts = key.split(".")
+        for p in parts[:-1]:
+            if not isinstance(cur.get(p), dict):
+                cur[p] = {}
+            cur = cur[p]
+        cur[parts[-1]] = val
+    return raw
+
+
+def resolve_nuts_sampler(name: str) -> str:
+    """auto: numpyro（JAX, C コンパイル不要で高速）→ nutpie → pymc の順に利用可能なもの。"""
+    if name != "auto":
+        return name
+    import importlib.util
+
+    for cand in ("numpyro", "nutpie"):
+        if importlib.util.find_spec(cand) is not None:
+            return cand
+    return "pymc"
+
+
+def load_config(path: str | Path, overrides: dict[str, Any] | None = None) -> Config:
     path = Path(path)
     with open(path, encoding="utf-8") as f:
         raw = yaml.safe_load(f) or {}
+    raw = apply_overrides(raw, overrides or {})
 
     base_dir = path.parent
 
@@ -119,15 +165,18 @@ def load_config(path: str | Path) -> Config:
             raise ValueError(f"control {c.column}: sign は {SIGNS} のいずれか")
         controls.append(c)
 
+    speed = _get(raw, "sampler.speed", "standard")
+    if speed not in SPEED_PRESETS:
+        raise ValueError(f"sampler.speed は {list(SPEED_PRESETS)} のいずれか: {speed}")
     sampler = {
-        "draws": 1000,
-        "tune": 1000,
-        "chains": 4,
+        **SPEED_PRESETS[speed],
         "target_accept": 0.95,
         "random_seed": 42,
-        "nuts_sampler": "pymc",
-        **(_get(raw, "sampler", {}) or {}),
+        "nuts_sampler": "auto",
+        # 明示した draws/tune/chains はプリセットより優先
+        **{k: v for k, v in (_get(raw, "sampler", {}) or {}).items() if v is not None},
     }
+    sampler["nuts_sampler"] = resolve_nuts_sampler(sampler["nuts_sampler"])
 
     optimization = {
         "enabled": True,

@@ -18,7 +18,31 @@
 | シナリオ | 「TV を 1.5 倍」「検索を 30,000 に」等の試算。保存済み推定結果から再推定なしでも実行可 |
 | 入出力 | CSV / BigQuery から読込、CSV・HTML 出力、BigQuery への書き戻し |
 
-## クイックスタート
+## Google Colab で使う（いちばん簡単）
+
+ブラウザで次の URL を開き、上から順にセルの ▶ を押すだけです。設定はフォームで変更できます。
+
+https://colab.research.google.com/github/data-everyday/claude-code-test/blob/claude/laughing-albattani-3u9cqu/mmm_colab.ipynb
+
+（ノートブック本体は `mmm_colab.ipynb`）
+
+## 計算時間の調整
+
+| 設定 `sampler.speed` | draws / tune / chains | 用途 | サンプルデータ(2コア)の目安 |
+|---|---|---|---|
+| `fast` | 500 / 500 / 2 | 列名・設定の試行錯誤 | 約 30 秒 |
+| `standard`（既定） | 1000 / 1000 / 4 | 通常 | 約 1 分 |
+| `precise` | 2000 / 2000 / 4 | 最終報告 | 約 2〜3 分 |
+
+- `validation.holdout_weeks` を 1 以上にすると推定を 2 回行うため、時間は約 2 倍
+- `sampler.nuts_sampler: auto`（既定）は高速な numpyro(JAX) があれば自動で使用
+- コマンドから一時的に変更: `--speed fast` や `--set キー=値`（複数可）
+
+```bash
+python -m mmm run --config mmm_config.yaml --speed fast --set validation.holdout_weeks=0
+```
+
+## クイックスタート（ローカル）
 
 ```bash
 pip install -r requirements.txt
@@ -32,7 +56,7 @@ python -m mmm sample-data --out data/sample_mmm.csv
 python -m mmm run --config mmm_config.yaml
 ```
 
-`mmm_output/report.html` を開くとレポートが見られます（サンプルデータで約 2 分。`--draws 300 --tune 300 --chains 2` で試行を短縮可）。
+`mmm_output/report.html` を開くとレポートが見られます（試行時は `--speed fast` で短縮）。
 
 ## 入力データ
 

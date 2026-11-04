@@ -52,12 +52,13 @@ model:
   beta_prior_sigma: 1.0
 
 sampler:
-  draws: 1000
-  tune: 1000
-  chains: 4
+  speed: standard                 # fast（試行用・数分）/ standard / precise（最終報告用）
+  # draws: 1000                   # 個別指定するとプリセットより優先
+  # tune: 1000
+  # chains: 4
   target_accept: 0.95
   random_seed: 42
-  nuts_sampler: pymc              # pymc / numpyro / nutpie（インストール済みなら高速）
+  nuts_sampler: auto              # auto = numpyro（高速）があれば使う / pymc / numpyro / nutpie
 
 validation:
   holdout_weeks: 12               # 0 で検証なし
