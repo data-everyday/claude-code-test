@@ -4,9 +4,12 @@ y_scaled[t] = intercept + trend + seasonality + controls
               + Σ_c beta_c * Hill(adstock(spend_c)[t]; K_c, S_c) + ε
 
 * 広告係数 beta_c は常に正:
-  - ROI 事前なし: beta_c ~ HalfNormal(beta_prior_sigma)
-  - ROI 事前あり: roi_c ~ LogNormal(log(mean), sd) とし、beta_c は roi_c から逆算
-    （roi_c > 0 なので beta_c > 0）
+  - 既定: roi_c ~ LogNormal(log(mean), sd) とし、beta_c は roi_c から逆算
+    （roi_c > 0 なので beta_c > 0）。mean/sd はチャネル別 roi_prior、
+    未指定なら model.default_roi_prior（既定 mean=1, sd=1）。
+    ROI で直接パラメータ化すると、係数と飽和パラメータ(K,S)の相関が切れ、
+    季節性等と連動するチャネルでも推定が安定する。
+  - model.default_roi_prior: null かつ roi_prior 未指定: beta_c ~ HalfNormal(beta_prior_sigma)
 * adstock: geometric（alpha）または delayed（alpha, theta=ピークラグ）
 * saturation: Hill（K=半飽和点, S=形状）
 """
@@ -128,7 +131,7 @@ class BayesianMMM:
 
             # --- saturation (Hill) ---
             K = pm.Beta("K", alpha=3.0, beta=3.0, dims="channel")
-            S = pm.Gamma("S", alpha=3.0, beta=2.0, dims="channel")
+            S = pm.Gamma("S", alpha=5.0, beta=3.0, dims="channel")
             sat = hill_pt(adstocked, K, S)  # (T, C)
 
             # --- 広告係数（正制約） ---
@@ -136,7 +139,7 @@ class BayesianMMM:
             betas = []
             for i, ch in enumerate(cfg.channels):
                 if ch.roi_prior_mean is not None:
-                    roi = pm.LogNormal(f"roi_prior_{ch.name}", mu=np.log(ch.roi_prior_mean),
+                    roi = pm.LogNormal(f"roi_{ch.name}", mu=np.log(ch.roi_prior_mean),
                                        sigma=ch.roi_prior_sd)
                     b = roi * spend_sum_train[i] / (md.y_scale * sat_sum_train[i])
                 else:

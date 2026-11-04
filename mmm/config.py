@@ -50,6 +50,7 @@ class Config:
     response_curve: dict[str, Any]
     output_dir: Path
     output_bq: dict[str, Any] = field(default_factory=dict)
+    scenarios: list[dict[str, Any]] = field(default_factory=list)
 
 
 def _get(d: dict, path: str, default=None):
@@ -80,6 +81,9 @@ def load_config(path: str | Path) -> Config:
 
     max_lag = int(_get(raw, "model.adstock_max_lag", 8))
 
+    # 全チャネル共通の ROI 事前（null で無効化 → HalfNormal 係数）
+    default_roi = _get(raw, "model.default_roi_prior", {"mean": 1.0, "sd": 1.0})
+
     channels = []
     for ch in _get(raw, "channels", []) or []:
         c = ChannelConfig(
@@ -90,6 +94,9 @@ def load_config(path: str | Path) -> Config:
             roi_prior_mean=_get(ch, "roi_prior.mean"),
             roi_prior_sd=_get(ch, "roi_prior.sd"),
         )
+        if c.roi_prior_mean is None and c.roi_prior_sd is None and default_roi:
+            c.roi_prior_mean = default_roi.get("mean")
+            c.roi_prior_sd = default_roi.get("sd")
         if c.adstock not in ADSTOCK_TYPES:
             raise ValueError(f"{c.name}: adstock は {ADSTOCK_TYPES} のいずれか")
         if (c.roi_prior_mean is None) != (c.roi_prior_sd is None):
@@ -160,4 +167,5 @@ def load_config(path: str | Path) -> Config:
         response_curve=response_curve,
         output_dir=out_dir,
         output_bq=_get(raw, "output.bigquery", {}) or {},
+        scenarios=_get(raw, "scenarios", []) or [],
     )

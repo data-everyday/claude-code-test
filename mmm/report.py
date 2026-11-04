@@ -148,7 +148,8 @@ table.tbl th{background:var(--card)}
 
 
 def build_report(path, *, cfg, summ, dec, pred, metrics, curves, decay, diagnostics,
-                 opt: dict | None, holdout_metrics: pd.DataFrame | None) -> None:
+                 opt: dict | None, holdout_metrics: pd.DataFrame | None,
+                 scenarios: pd.DataFrame | None = None) -> None:
     channels = list(summ["channel"])
     total_sales = dec["actual"].sum()
     ad_share = summ["contribution_mean"].sum() / total_sales
@@ -203,6 +204,25 @@ def build_report(path, *, cfg, summ, dec, pred, metrics, curves, decay, diagnost
 {fig_opt(opt['table'])}
 """
 
+    scen_html = ""
+    if scenarios is not None and len(scenarios):
+        scfmt = {"current_spend": "{:,.0f}", "scenario_spend": "{:,.0f}", "spend_change": "{:+,.0f}",
+                 "current_contribution": "{:,.0f}", "scenario_contribution": "{:,.0f}",
+                 "delta_contribution": "{:+,.0f}", "delta_lo": "{:+,.0f}", "delta_hi": "{:+,.0f}",
+                 "incremental_roi": "{:.2f}", "prob_delta_positive": "{:.0%}"}
+        blocks = []
+        for name, d in scenarios.groupby("scenario", sort=False):
+            tot = d[d["channel"] == "TOTAL"].iloc[0]
+            blocks.append(
+                f'<h3>{html.escape(str(name))}</h3><p class="muted">直近 {int(tot["period_weeks"])} 週。'
+                f'支出 {tot["spend_change"]:+,.0f} → 貢献 {tot["delta_contribution"]:+,.0f}'
+                f'（94%区間 [{tot["delta_lo"]:+,.0f}, {tot["delta_hi"]:+,.0f}]、'
+                f'プラスの確率 {tot["prob_delta_positive"]:.0%}）</p>'
+                f'<div class="scroll">{_table(d.drop(columns=["scenario", "period_weeks"]), scfmt)}</div>')
+        scen_html = ('<h2>シナリオシミュレーション</h2><p class="muted">実績の週次パターンを維持して支出を変えた場合の、'
+                     '対象期間内の貢献の変化（期間外へ持ち越す adstock 効果は含まない）。'
+                     'incremental_roi = 貢献の変化 ÷ 支出の変化。</p>' + "".join(blocks))
+
     page = f"""<!doctype html><html lang="ja"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>MMM Report</title><style>{CSS}</style></head><body><main>
@@ -238,6 +258,7 @@ def build_report(path, *, cfg, summ, dec, pred, metrics, curves, decay, diagnost
 <h2>adstock（持越効果）</h2>
 {fig_adstock(decay)}
 {opt_html}
+{scen_html}
 </main></body></html>"""
     with open(path, "w", encoding="utf-8") as f:
         f.write(page)

@@ -75,6 +75,10 @@ validation: {{holdout_weeks: 8}}
 optimization: {{period_weeks: 26, n_draws: 20}}
 response_curve: {{n_points: 5, n_draws: 20}}
 output: {{dir: out}}
+scenarios:
+  - {{name: same, multipliers: {{tv: 1.0}}}}
+  - {{name: tv_up, period_weeks: 13, multipliers: {{tv: 1.5}}}}
+  - {{name: by_spend, spend: {{search: 1000}}}}
 {extra}""")
     return tmp_path / "c.yaml"
 
@@ -82,6 +86,11 @@ output: {{dir: out}}
 def test_config_validation(tmp_path):
     cfg = load_config(_write_cfg(tmp_path))
     assert cfg.channels[0].roi_prior_mean == 1.5
+    # roi_prior 未指定チャネルには既定の ROI 事前 (mean=1, sd=1) が入る
+    assert (cfg.channels[1].roi_prior_mean, cfg.channels[1].roi_prior_sd) == (1.0, 1.0)
+    cfg2 = load_config(_write_cfg(tmp_path, "model: {adstock_max_lag: 6, default_roi_prior: null}"))
+    assert cfg2.channels[1].roi_prior_mean is None
+    assert cfg2.channels[0].roi_prior_mean == 1.5
     assert cfg.controls[1].sign == "free"
     spec = ChannelSpec.from_config(cfg)
     assert spec.max_lag == 6 and list(spec.lags) == [6, 4, 6]
@@ -113,9 +122,43 @@ def test_end_to_end_positive_effects(tmp_path):
     assert (opt["multiplier"] <= opt["upper_bound"] + 1e-9).all()
     assert res["report"].exists()
 
+    sc = res["scenarios"]
+    same = sc[(sc["scenario"] == "same") & (sc["channel"] == "TOTAL")].iloc[0]
+    assert same["delta_contribution"] == pytest.approx(0, abs=1e-6)
+    tv_up = sc[(sc["scenario"] == "tv_up") & (sc["channel"] == "tv")].iloc[0]
+    assert tv_up["scenario_spend"] == pytest.approx(tv_up["current_spend"] * 1.5)
+    assert tv_up["delta_contribution"] > 0  # 支出増 → 正の効果のみ
+    by_spend = sc[(sc["scenario"] == "by_spend") & (sc["channel"] == "search")].iloc[0]
+    assert by_spend["scenario_spend"] == pytest.approx(1000)
+
+    # 保存済み事後分布から再推定なしで試算
+    from mmm.__main__ import main
+    assert main(["simulate", "--config", str(tmp_path / "c.yaml")]) == 0
+    assert (cfg.output_dir / "scenarios.csv").exists()
+
 
 def test_beta_strictly_positive(tmp_path):
     cfg = load_config(_write_cfg(tmp_path))
+    df = pd.read_csv(tmp_path / "d.csv")
+    md = build_model_data(validate_dataframe(df, cfg), cfg)
+    fit = BayesianMMM(cfg, md).fit()
+    assert (fit.posterior["beta"] > 0).all()
+
+
+def test_scenario_validation(tmp_path):
+    from mmm.scenario import _multipliers
+
+    names = ["tv", "search"]
+    cur = np.array([100.0, 0.0])
+    np.testing.assert_allclose(_multipliers({"spend": {"tv": 150}}, names, cur), [1.5, 1.0])
+    with pytest.raises(ValueError, match="未定義"):
+        _multipliers({"multipliers": {"radio": 2}}, names, cur)
+    with pytest.raises(ValueError, match="実績支出が 0"):
+        _multipliers({"spend": {"search": 10}}, names, cur)
+
+
+def test_halfnormal_fallback_positive(tmp_path):
+    cfg = load_config(_write_cfg(tmp_path, "model: {adstock_max_lag: 6, default_roi_prior: null}"))
     df = pd.read_csv(tmp_path / "d.csv")
     md = build_model_data(validate_dataframe(df, cfg), cfg)
     fit = BayesianMMM(cfg, md).fit()

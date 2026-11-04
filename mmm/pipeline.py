@@ -11,6 +11,7 @@ from .data import build_model_data, load_dataframe
 from .model import BayesianMMM
 from .optimize import optimize_budget
 from .report import build_report
+from .scenario import run_scenarios
 
 log = logging.getLogger(__name__)
 
@@ -59,7 +60,12 @@ def run(cfg: Config) -> dict:
     if cfg.optimization.get("enabled", True):
         opt = optimize_budget(md, mmm, fit, cfg.optimization)
 
+    scen = run_scenarios(md, mmm, fit.posterior, cfg.scenarios,
+                         int(cfg.optimization.get("period_weeks") or T))
+
     # --- 出力 ---
+    if len(scen):
+        scen.to_csv(out / "scenarios.csv", index=False)
     summ.to_csv(out / "channel_summary.csv", index=False)
     dec.to_csv(out / "decomposition.csv", index=False)
     pred.to_csv(out / "predictions.csv", index=False)
@@ -78,7 +84,7 @@ def run(cfg: Config) -> dict:
     report_path = out / "report.html"
     build_report(report_path, cfg=cfg, summ=summ, dec=dec, pred=pred, metrics=metrics,
                  curves=curves, decay=decay, diagnostics=fit.diagnostics, opt=opt,
-                 holdout_metrics=holdout_metrics)
+                 holdout_metrics=holdout_metrics, scenarios=scen)
     log.info("レポート出力: %s", report_path)
 
     if cfg.output_bq.get("enabled"):
@@ -88,8 +94,10 @@ def run(cfg: Config) -> dict:
                   "response_curves": curves}
         if opt:
             tables["budget_optimization"] = opt["table"]
+        if len(scen):
+            tables["scenarios"] = scen
         write_tables(tables, cfg.output_bq, (cfg.raw.get("gcp") or {}).get("project_id"))
 
     return {"summary": summ, "decomposition": dec, "metrics": metrics, "optimization": opt,
-            "holdout_metrics": holdout_metrics, "diagnostics": fit.diagnostics,
+            "holdout_metrics": holdout_metrics, "scenarios": scen, "diagnostics": fit.diagnostics,
             "report": report_path}
