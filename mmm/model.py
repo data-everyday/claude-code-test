@@ -4,9 +4,10 @@ y_scaled[t] = intercept + trend + seasonality + controls
               + Σ_c beta_c * Hill(adstock(spend_c)[t]; K_c, S_c) + ε
 
 * 広告係数 beta_c は常に正:
-  - 既定: roi_c ~ LogNormal(log(mean), sd) とし、beta_c は roi_c から逆算
-    （roi_c > 0 なので beta_c > 0）。mean/sd はチャネル別 roi_prior、
-    未指定なら model.default_roi_prior（既定 mean=1, sd=1）。
+  - 既定: roi_c ~ LogNormal(log(median), sd) とし、beta_c は roi_c から逆算
+    （roi_c > 0 なので beta_c > 0）。median/sd はチャネル別 roi_prior、
+    未指定なら model.default_roi_prior。既定の auto は
+    median = ad_share(0.2) × KPI 合計 ÷ 広告費合計（KPI の単位に依存しない）。
     ROI で直接パラメータ化すると、係数と飽和パラメータ(K,S)の相関が切れ、
     季節性等と連動するチャネルでも推定が安定する。
   - model.default_roi_prior: null かつ roi_prior 未指定: beta_c ~ HalfNormal(beta_prior_sigma)
@@ -95,6 +96,30 @@ class BayesianMMM:
         self.xlag = lag_stack(md.spend_scaled, self.spec.max_lag)  # (L, T, C)
 
     # ------------------------------------------------------------------
+    def roi_priors(self, train_mask: np.ndarray | None = None) -> list[dict | None]:
+        """チャネルごとに実際に使う ROI 事前 {median, sd, source}（None = HalfNormal 係数）。"""
+        if train_mask is None:
+            train_mask = np.ones(len(self.md.y), dtype=bool)
+        d = self.cfg.default_roi
+        default = None
+        if d is not None and d["mode"] == "manual":
+            default = {"median": d["median"], "sd": d["sd"], "source": "default(manual)"}
+        elif d is not None:
+            kpi_total = float(self.md.y[train_mask].sum())
+            spend_total = float(self.md.spend[train_mask].sum())
+            if kpi_total <= 0:
+                raise ValueError("KPI の合計が 0 以下のため ROI 事前を自動計算できません。"
+                                 "model.default_roi_prior に median を指定してください")
+            default = {"median": d["ad_share"] * kpi_total / spend_total, "sd": d["sd"],
+                       "source": f"auto(広告シェア{d['ad_share']:.0%})"}
+        out = []
+        for ch in self.cfg.channels:
+            if ch.roi_prior_mean is not None:
+                out.append({"median": ch.roi_prior_mean, "sd": ch.roi_prior_sd, "source": "channel"})
+            else:
+                out.append(default)
+        return out
+
     def build(self, train_mask: np.ndarray):
         import pymc as pm
         import pytensor.tensor as pt
@@ -138,10 +163,11 @@ class BayesianMMM:
             # --- 広告係数（正制約） ---
             sat_sum_train = sat[train_idx].sum(axis=0)
             betas = []
+            priors = self.roi_priors(train_mask)
             for i, ch in enumerate(cfg.channels):
-                if ch.roi_prior_mean is not None:
-                    roi = pm.LogNormal(f"roi_{ch.name}", mu=np.log(ch.roi_prior_mean),
-                                       sigma=ch.roi_prior_sd)
+                pr = priors[i]
+                if pr is not None:
+                    roi = pm.LogNormal(f"roi_{ch.name}", mu=np.log(pr["median"]), sigma=pr["sd"])
                     b = roi * spend_sum_train[i] / (md.y_scale * sat_sum_train[i])
                 else:
                     b = pm.HalfNormal(f"beta_raw_{ch.name}", sigma=cfg.beta_prior_sigma)

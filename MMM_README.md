@@ -12,7 +12,7 @@
 | adstock | チャネルごとに `geometric`（幾何減衰）/ `delayed`（ピークが遅れる）を選択。最大ラグは既定 13 週（1〜20、チャネル別指定可） |
 | saturation | Hill 関数（半飽和点 K・形状 S）。S 字の応答も表現可 |
 | コントロール | トレンド（`linear` / 変化点付き `changepoint` / `none`）・フーリエ季節性・任意の列（価格・プロモ等。符号制約 `positive`/`negative`/`free`） |
-| 事前知識 | リフト試験等の ROI を `roi_prior: {median, sd}` で投入可能 |
+| 事前知識 | ROI 事前は「広告貢献シェアの想定(既定20%)」から KPI の単位に合わせて自動設定。リフト試験等の ROI を `roi_prior: {median, sd}` で投入可能 |
 | 検証 | 収束診断（R-hat・ESS・divergence を警告）、末尾 N 週のホールドアウト検証（MAPE/RMSE/R²/区間被覆率） |
 | 最適化 | 総予算固定＋チャネル別上下限（現状比倍率）で期待貢献を最大化 |
 | シナリオ | 「TV を 1.5 倍」「検索を 30,000 に」等の試算。保存済み推定結果から再推定なしでも実行可 |
@@ -83,11 +83,30 @@ y[t]/mean(y) = intercept + trend(t) + Σ fourier + Σ γ_k·control_k[t]
   - geometric: `w_l ∝ α^l`
   - delayed:   `w_l ∝ α^((l-θ)^2)`（θ = ピークのラグ）
 - 事前分布: `α ~ Beta(1,3)`, `θ/(L-1) ~ Beta(1.5,3)`（delayed のみ）, `K ~ Beta(3,3)`, `S ~ Gamma(5,3)`
-- 広告係数は ROI で直接パラメータ化: `ROI_c ~ LogNormal(log(median), sd)`、
+- 広告係数は ROI（= KPI 増分 ÷ 広告費）で直接パラメータ化: `ROI_c ~ LogNormal(log(median), sd)`、
   `β_c = ROI_c · Σspend_c / (mean(y) · ΣHill_c)`（ROI>0 なので β>0）
-  - median/sd はチャネル別 `roi_prior`、未指定なら `model.default_roi_prior`（既定 median=1, sd=1 → 94%区間 ≈ 0.15〜6.6）。旧キー `mean` も可（意味は中央値）
   - 係数と飽和パラメータの相関が切れ、季節性と連動するチャネルでも推定が安定（divergence が減る）
-  - `model.default_roi_prior: null` で従来の `β ~ HalfNormal(beta_prior_sigma)` に切替
+
+### ROI 事前分布（KPI の単位に合わせて自動設定）
+
+ROI の単位は KPI 次第です（売上なら「円/円」、CV 件数なら「件/円」で 0.0002 のような値）。
+そのため既定では ROI を固定値で置かず、**「KPI のうち広告で説明される割合」の想定から自動計算**します。
+
+```
+ROI 事前の中央値 = ad_share × KPI 合計 ÷ 広告費合計      （既定 ad_share = 0.2、sd = 1.0）
+```
+
+| 設定 `model.default_roi_prior` | 内容 |
+|---|---|
+| `{mode: auto, ad_share: 0.2, sd: 1.0}`（既定） | 上式で自動計算。KPI が売上でも件数でも毎回の計算は不要 |
+| `{median: 1.5, sd: 1.0}` | ROI の中央値を直接指定（売上 KPI で目安がある場合など） |
+| `null` | 係数 ~ HalfNormal（非推奨: 広告費が少ないチャネルほど高 ROI を暗に仮定） |
+
+- チャネル別の `roi_prior: {median, sd}`（リフト試験など）は常に優先
+- sd=1.0 は中央値の約 1/6.6〜6.6 倍が 94% 範囲。データが強いチャネルはデータに従い、弱いチャネルは中央値側に寄る
+- 実際に使った事前は `channel_summary.csv` / レポートの `roi_prior_median`・`roi_prior_source` で確認できる
+- 検証（サンプルデータ）: KPI を売上 → 件数（÷50）に変えても auto なら推定 ROI がちょうど 1/50 になり結果が一致。
+  件数 KPI に固定の中央値 1 を使うと、検索の貢献シェアを約 3.5 倍に過大推定した
 
 ### トレンド
 
@@ -112,9 +131,8 @@ y[t]/mean(y) = intercept + trend(t) + Σ fourier + Σ γ_k·control_k[t]
 
 ### ROI 事前の注意
 
-データだけでは識別しにくいチャネルは、推定値が事前の中央値（既定 1.0）側に引き寄せられます。
-サンプルデータでは検索の真の ROI 3.0 に対し推定は 1.26（94%区間 0.20〜3.56）でした。
-自社の典型的な ROI 水準が分かっている場合は `default_roi_prior.median` をそれに合わせ、
+データだけでは識別しにくいチャネルは、推定値が事前の中央値側に引き寄せられます。
+自社の広告依存度に合わせて `ad_share` を調整し（広告依存が低い 0.1 / 高い 0.3 など）、
 リフト試験があるチャネルは `roi_prior` で個別に指定してください。
 
 ## 出力（`output.dir`）

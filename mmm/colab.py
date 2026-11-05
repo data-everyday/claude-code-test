@@ -52,7 +52,8 @@ def build_config(*, csv_path: str, date_column: str, target_column: str, channel
                  controls: str = "", speed: str = "fast", holdout_weeks: int = 0,
                  seasonality: bool = True, trend: str | bool = "linear", max_lag: int = 13,
                  changepoint_interval: int = 26, changepoint_scale: float = 0.05,
-                 roi_prior_mean: float = 1.0, roi_prior_sd: float = 1.0,
+                 roi_prior_mode: str = "auto", ad_share: float = 0.2,
+                 roi_prior_median: float = 1.0, roi_prior_sd: float = 1.0,
                  opt_period_weeks: int = 52, budget_lower: float = 0.7,
                  budget_upper: float = 1.3, total_budget: float = 0,
                  output_dir: str = "mmm_output") -> dict:
@@ -77,7 +78,10 @@ def build_config(*, csv_path: str, date_column: str, target_column: str, channel
             "changepoint": {"interval_weeks": int(changepoint_interval),
                             "prior_scale": float(changepoint_scale)},
             "seasonality": {"fourier_order": 2 if seasonality else 0, "period_weeks": 52.18},
-            "default_roi_prior": {"median": float(roi_prior_mean), "sd": float(roi_prior_sd)},
+            "default_roi_prior": (
+                {"mode": "auto", "ad_share": float(ad_share), "sd": float(roi_prior_sd)}
+                if roi_prior_mode == "auto"
+                else {"mode": "manual", "median": float(roi_prior_median), "sd": float(roi_prior_sd)}),
         },
         "sampler": {"speed": speed, "nuts_sampler": "auto"},
         "validation": {"holdout_weeks": int(holdout_weeks), "refit_full": True},

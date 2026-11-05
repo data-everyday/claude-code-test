@@ -46,6 +46,9 @@ class Config:
     seasonality_period: float
     max_lag: int
     beta_prior_sigma: float
+    # roi_prior 未指定チャネルに使う ROI 事前。None で HalfNormal 係数
+    # {"mode": "auto", "ad_share": 0.2, "sd": 1.0} または {"mode": "manual", "median": 1.0, "sd": 1.0}
+    default_roi: dict[str, Any] | None
     sampler: dict[str, Any]
     holdout_weeks: int
     refit_full: bool
@@ -110,6 +113,35 @@ def resolve_nuts_sampler(name: str) -> str:
     return "pymc"
 
 
+def parse_default_roi(spec) -> dict[str, Any] | None:
+    """model.default_roi_prior を解釈する。
+    - null                         : 無効（係数 ~ HalfNormal）
+    - "auto" / {ad_share:, sd:}    : 自動。ROI 中央値 = ad_share × KPI 合計 ÷ 広告費合計
+                                     （KPI の単位に依存しない。既定 ad_share=0.2, sd=1.0）
+    - {median:, sd:}               : ROI 中央値を直接指定（旧キー mean も可）
+    """
+    if spec is None:
+        return None
+    if spec == "auto":
+        spec = {"mode": "auto"}
+    if not isinstance(spec, dict):
+        raise ValueError("model.default_roi_prior は auto / {ad_share:, sd:} / {median:, sd:} / null で指定してください")
+    median = spec.get("median", spec.get("mean"))
+    if spec.get("mode") == "manual" and median is None:
+        raise ValueError("model.default_roi_prior: mode: manual のときは median を指定してください")
+    sd = float(spec.get("sd", 1.0))
+    if sd <= 0:
+        raise ValueError("model.default_roi_prior.sd は正の値")
+    if median is not None and spec.get("mode") != "auto":
+        if median <= 0:
+            raise ValueError("model.default_roi_prior.median は正の値")
+        return {"mode": "manual", "median": float(median), "sd": sd}
+    share = float(spec.get("ad_share", 0.2))
+    if not 0 < share < 1:
+        raise ValueError("model.default_roi_prior.ad_share は 0〜1 の間（例: 0.2 = 20%）")
+    return {"mode": "auto", "ad_share": share, "sd": sd}
+
+
 def load_config(path: str | Path, overrides: dict[str, Any] | None = None) -> Config:
     path = Path(path)
     with open(path, encoding="utf-8") as f:
@@ -146,10 +178,7 @@ def load_config(path: str | Path, overrides: dict[str, Any] | None = None) -> Co
     if changepoint["prior_scale"] <= 0:
         raise ValueError("model.changepoint.prior_scale は正の値")
 
-    # 全チャネル共通の ROI 事前（null で無効化 → HalfNormal 係数）
-    default_roi = _get(raw, "model.default_roi_prior", {"median": 1.0, "sd": 1.0})
-    if default_roi is not None and not isinstance(default_roi, dict):
-        raise ValueError("model.default_roi_prior は {median:, sd:} か null で指定してください")
+    default_roi = parse_default_roi(_get(raw, "model.default_roi_prior", {"mode": "auto"}))
 
     channels = []
     for ch in _get(raw, "channels", []) or []:
@@ -162,9 +191,6 @@ def load_config(path: str | Path, overrides: dict[str, Any] | None = None) -> Co
             roi_prior_mean=_get(ch, "roi_prior.median", _get(ch, "roi_prior.mean")),
             roi_prior_sd=_get(ch, "roi_prior.sd"),
         )
-        if c.roi_prior_mean is None and c.roi_prior_sd is None and default_roi:
-            c.roi_prior_mean = default_roi.get("median", default_roi.get("mean"))
-            c.roi_prior_sd = default_roi.get("sd")
         if c.max_lag is not None and not 1 <= int(c.max_lag) <= MAX_LAG_LIMIT:
             raise ValueError(f"{c.name}: max_lag は 1〜{MAX_LAG_LIMIT} で指定してください")
         if c.adstock not in ADSTOCK_TYPES:
@@ -234,6 +260,7 @@ def load_config(path: str | Path, overrides: dict[str, Any] | None = None) -> Co
         seasonality_period=float(_get(raw, "model.seasonality.period_weeks", 52.18)),
         max_lag=max_lag,
         beta_prior_sigma=float(_get(raw, "model.beta_prior_sigma", 1.0)),
+        default_roi=default_roi,
         sampler=sampler,
         holdout_weeks=int(_get(raw, "validation.holdout_weeks", 0)),
         refit_full=bool(_get(raw, "validation.refit_full", True)),

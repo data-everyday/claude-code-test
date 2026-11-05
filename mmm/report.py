@@ -199,6 +199,7 @@ def build_report(path, *, cfg, summ, dec, pred, metrics, curves, decay, diagnost
     sfmt = {"spend": "{:,.0f}", "contribution_mean": "{:,.0f}", "contribution_lo": "{:,.0f}",
             "contribution_hi": "{:,.0f}", "contribution_share": "{:.1%}", "roi_mean": "{:.2f}",
             "roi_lo": "{:.2f}", "roi_hi": "{:.2f}", "marginal_roi": "{:.2f}",
+            "roi_prior_median": "{:.3g}", "roi_prior_sd": "{:.2f}",
             "adstock_alpha": "{:.2f}", "adstock_theta": "{:.1f}", "hill_K": "{:.2f}",
             "hill_S": "{:.2f}"}
 
@@ -277,7 +278,8 @@ def build_report(path, *, cfg, summ, dec, pred, metrics, curves, decay, diagnost
 {base_html}
 
 <h2>チャネル別 ROI</h2>
-<p class="muted">ROI = 期間内の増分売上 ÷ 支出。限界ROI = 支出を 1% 増やした場合の 追加売上 ÷ 追加支出。広告係数は正に制約されています。</p>
+<p class="muted">ROI = 期間内の KPI 増分 ÷ 支出（KPI の単位あたり／広告費 1 単位）。限界ROI = 支出を 1% 増やした場合の 追加 KPI ÷ 追加支出。広告係数は正に制約されています。
+roi_prior_median / roi_prior_sd は推定に使った ROI の事前分布（auto = 想定広告シェア × KPI 合計 ÷ 広告費合計）。事後の ROI が事前の中央値に近く区間も広いチャネルは、データより事前で決まっている可能性があります。</p>
 {fig_roi(summ)}
 <div class="scroll">{_table(summ, sfmt)}</div>
 

@@ -64,6 +64,7 @@ def channel_summary(md: ModelData, fit: FitResult, mmm: BayesianMMM) -> pd.DataF
     lo, hi = _q(roi)
     clo, chi = _q(total_contrib)
     mroi = marginal_roi(md, mmm, subsample(p, 200))
+    priors = mmm.roi_priors(fit.train_mask)
 
     rows = []
     for i, ch in enumerate(md.channel_names):
@@ -78,6 +79,9 @@ def channel_summary(md: ModelData, fit: FitResult, mmm: BayesianMMM) -> pd.DataF
             "roi_lo": lo[i],
             "roi_hi": hi[i],
             "marginal_roi": mroi[i],
+            "roi_prior_median": priors[i]["median"] if priors[i] else np.nan,
+            "roi_prior_sd": priors[i]["sd"] if priors[i] else np.nan,
+            "roi_prior_source": priors[i]["source"] if priors[i] else "halfnormal",
             "adstock_alpha": p["alpha"][:, i].mean(),
             "adstock_theta": p["theta"][:, i].mean() if mmm.spec.is_delayed[i] else np.nan,
             "hill_K": p["K"][:, i].mean(),

@@ -86,11 +86,21 @@ scenarios:
 def test_config_validation(tmp_path):
     cfg = load_config(_write_cfg(tmp_path))
     assert cfg.channels[0].roi_prior_mean == 1.5
-    # roi_prior 未指定チャネルには既定の ROI 事前 (mean=1, sd=1) が入る
-    assert (cfg.channels[1].roi_prior_mean, cfg.channels[1].roi_prior_sd) == (1.0, 1.0)
+    # 既定は auto（広告シェア 20%）。roi_prior 未指定チャネルは KPI/広告費 から中央値を計算
+    assert cfg.default_roi == {"mode": "auto", "ad_share": 0.2, "sd": 1.0}
+    assert cfg.channels[1].roi_prior_mean is None
+    df0 = pd.read_csv(tmp_path / "d.csv")
+    md0 = build_model_data(validate_dataframe(df0, cfg), cfg)
+    pri = BayesianMMM(cfg, md0).roi_priors()
+    assert pri[0]["source"] == "channel" and pri[0]["median"] == 1.5
+    expected = 0.2 * md0.y.sum() / md0.spend.sum()
+    assert pri[1]["median"] == pytest.approx(expected) and pri[1]["sd"] == 1.0
     cfg2 = load_config(_write_cfg(tmp_path, "model: {adstock_max_lag: 6, default_roi_prior: null}"))
-    assert cfg2.channels[1].roi_prior_mean is None
-    assert cfg2.channels[0].roi_prior_mean == 1.5
+    assert cfg2.default_roi is None
+    cfg3 = load_config(_write_cfg(tmp_path, "model: {default_roi_prior: {median: 2.0, sd: 0.5}}"))
+    assert cfg3.default_roi == {"mode": "manual", "median": 2.0, "sd": 0.5}
+    with pytest.raises(ValueError, match="ad_share"):
+        load_config(_write_cfg(tmp_path, "model: {default_roi_prior: {ad_share: 20}}"))
     assert cfg.controls[1].sign == "free"
     spec = ChannelSpec.from_config(cfg)
     assert spec.max_lag == 6 and list(spec.lags) == [6, 4, 6]
