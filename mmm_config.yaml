@@ -20,7 +20,7 @@ channels:
   - name: tv
     column: tv_spend
     adstock: delayed              # geometric / delayed（ピークが遅れて来る）
-    # max_lag: 8                  # チャネル個別の最大ラグ（省略時 model.adstock_max_lag）
+    # max_lag: 13                 # チャネル個別の最大ラグ 1〜20（省略時 model.adstock_max_lag）
     # roi_prior:                  # 任意: リフト試験等の知見で上書き → ROI ~ LogNormal(log(median), sd)
     #   median: 1.5
     #   sd: 0.4
@@ -39,8 +39,13 @@ controls:
     sign: positive
 
 model:
-  adstock_max_lag: 8
-  trend: true
+  adstock_max_lag: 13             # 最大ラグ（週）1〜20。効果の実際の長さは推定される減衰率で決まる
+  # トレンド: none / linear（期間全体で 1 本の直線）/ changepoint（区分線形。一定間隔で傾きが変われる）
+  trend: linear
+  changepoint:                    # trend: changepoint のときのみ使用
+    interval_weeks: 26            # 変化点の候補を何週ごとに置くか
+    prior_scale: 0.05             # 傾き変化の大きさの事前（大きいほど柔軟。大きすぎると広告効果を吸収）
+    range: 0.9                    # 変化点を置く範囲（先頭から 9 割。末尾は外挿が不安定になるため）
   seasonality:
     fourier_order: 2              # 0 で季節性なし
     period_weeks: 52.18

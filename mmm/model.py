@@ -153,12 +153,24 @@ class BayesianMMM:
             # --- ベースライン ---
             intercept = pm.Normal("intercept", mu=float(y_s.mean()), sigma=1.0)
             mu = intercept + contrib.sum(axis=1)
-            if cfg.trend:
+            # トレンド: linear = 期間全体で 1 本の直線（週ごとの揺らぎはない）
+            #          changepoint = 区分線形（変化点ごとに傾きが変わる。δ ~ Laplace で多くは ≈0）
+            trend = pt.zeros(T)
+            if cfg.trend in ("linear", "changepoint"):
                 trend_coef = pm.Normal("trend_coef", 0.0, 1.0)
-                mu = mu + trend_coef * md.trend
+                trend = trend_coef * md.trend
+            if cfg.trend == "changepoint" and md.changepoint_basis.shape[1]:
+                delta = pm.Laplace("changepoint_delta", 0.0, float(cfg.changepoint["prior_scale"]),
+                                   shape=md.changepoint_basis.shape[1])
+                trend = trend + pt.dot(md.changepoint_basis, delta)
+            trend = pm.Deterministic("trend", trend, dims="time")
+            mu = mu + trend
+            season = pt.zeros(T)
             if md.fourier.shape[1]:
                 fc = pm.Normal("fourier_coef", 0.0, 0.5, dims="fourier")
-                mu = mu + pt.dot(md.fourier, fc)
+                season = pt.dot(md.fourier, fc)
+            season = pm.Deterministic("seasonality", season, dims="time")
+            mu = mu + season
             if md.control_names:
                 coefs = []
                 for ctl in cfg.controls:
@@ -207,7 +219,8 @@ class BayesianMMM:
         post = idata.posterior
         out = {}
         for name in ["intercept", "beta", "alpha", "theta", "K", "S", "sigma", "trend_coef",
-                     "fourier_coef", "control_coef", "mu", "channel_contribution"]:
+                     "changepoint_delta", "fourier_coef", "control_coef", "mu",
+                     "channel_contribution", "trend", "seasonality"]:
             if name in post:
                 v = np.asarray(post[name].values)
                 out[name] = v.reshape((-1,) + v.shape[2:])
@@ -221,7 +234,8 @@ def compute_diagnostics(idata, posterior: dict) -> dict:
     import arviz as az
 
     var_names = [v for v in ["intercept", "beta", "alpha", "theta", "K", "S", "sigma",
-                             "trend_coef", "fourier_coef", "control_coef"] if v in posterior]
+                             "trend_coef", "changepoint_delta", "fourier_coef", "control_coef"]
+                 if v in posterior]
     try:
         summ = az.summary(idata, var_names=var_names)
         summ = summ.apply(lambda col: col.astype(float) if col.dtype == object else col)

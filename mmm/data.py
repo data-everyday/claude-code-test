@@ -86,6 +86,8 @@ class ModelData:
     control_std: np.ndarray
     trend: np.ndarray  # (T,) 0..1
     fourier: np.ndarray  # (T, 2*order)
+    changepoint_basis: np.ndarray  # (T, J) max(0, t - s_j)
+    changepoint_index: np.ndarray  # (J,) 変化点の週番号
     channel_names: list[str]
     control_names: list[str]
 
@@ -120,6 +122,8 @@ def build_model_data(df: pd.DataFrame, cfg: Config) -> ModelData:
     t_index = np.arange(T, dtype=float)
     trend = t_index / max(T - 1, 1)
     fourier = fourier_features(t_index, cfg.seasonality_period, cfg.seasonality_order)
+    cp_idx, cp_basis = changepoint_design(T, cfg.changepoint) if cfg.trend == "changepoint" \
+        else (np.zeros(0, dtype=int), np.zeros((T, 0)))
 
     return ModelData(
         dates=df[cfg.date_column],
@@ -132,6 +136,19 @@ def build_model_data(df: pd.DataFrame, cfg: Config) -> ModelData:
         control_std=std,
         trend=trend,
         fourier=fourier,
+        changepoint_basis=cp_basis,
+        changepoint_index=cp_idx,
         channel_names=[c.name for c in cfg.channels],
         control_names=ctl_cols,
     )
+
+
+def changepoint_design(T: int, cp: dict) -> tuple[np.ndarray, np.ndarray]:
+    """区分線形トレンドの基底。interval_weeks ごとに変化点を置き（先頭 range 割の期間内）、
+    basis[t, j] = max(0, t - s_j)（t, s は 0〜1 に正規化）。傾きの変化量 δ_j を掛けて足す。"""
+    step = int(cp["interval_weeks"])
+    limit = int(np.floor(cp["range"] * (T - 1)))
+    idx = np.arange(step, limit + 1, step, dtype=int)
+    t = np.arange(T) / max(T - 1, 1)
+    s = idx / max(T - 1, 1)
+    return idx, np.maximum(0.0, t[:, None] - s[None, :])

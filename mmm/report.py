@@ -62,6 +62,25 @@ def fig_decomp(dec: pd.DataFrame, channels: list[str]) -> str:
     return _img(fig)
 
 
+def fig_baseline(base: pd.DataFrame, cp_dates: list) -> str:
+    fig, axes = plt.subplots(2, 1, figsize=(11, 4.6), sharex=True)
+    ax = axes[0]
+    ax.fill_between(base["date"], base["trend_lo"], base["trend_hi"], color="#6f7c91", alpha=0.2)
+    ax.plot(base["date"], base["trend_level"], color="#1d2330", lw=1.6, label="intercept + trend")
+    for i, d in enumerate(cp_dates):
+        ax.axvline(d, color="#e8743b", ls=":", lw=0.9, label="changepoint candidate" if i == 0 else None)
+    ax.legend(loc="upper left", fontsize=8, frameon=False)
+    ax2 = axes[1]
+    ax2.plot(base["date"], base["seasonality"], color="#19a979", lw=1.3, label="seasonality")
+    ax2.plot(base["date"], base["controls"], color="#945ecf", lw=1, alpha=0.8, label="controls")
+    ax2.axhline(0, color="#999", lw=0.6)
+    ax2.legend(loc="upper left", fontsize=8, frameon=False, ncol=2)
+    for a in axes:
+        a.spines[["top", "right"]].set_visible(False)
+    fig.tight_layout()
+    return _img(fig)
+
+
 def fig_roi(summ: pd.DataFrame) -> str:
     fig, ax = plt.subplots(figsize=(6.5, 0.5 * len(summ) + 1.2))
     y = np.arange(len(summ))
@@ -149,7 +168,8 @@ table.tbl th{background:var(--card)}
 
 def build_report(path, *, cfg, summ, dec, pred, metrics, curves, decay, diagnostics,
                  opt: dict | None, holdout_metrics: pd.DataFrame | None,
-                 scenarios: pd.DataFrame | None = None) -> None:
+                 scenarios: pd.DataFrame | None = None, baseline: pd.DataFrame | None = None,
+                 changepoint_dates: list | None = None) -> None:
     channels = list(summ["channel"])
     total_sales = dec["actual"].sum()
     ad_share = summ["contribution_mean"].sum() / total_sales
@@ -204,6 +224,14 @@ def build_report(path, *, cfg, summ, dec, pred, metrics, curves, decay, diagnost
 {fig_opt(opt['table'])}
 """
 
+    base_html = ""
+    if baseline is not None:
+        trend_desc = {"none": "トレンドなし", "linear": "直線トレンド（期間全体で 1 本の直線）",
+                      "changepoint": f"変化点付きトレンド（{cfg.changepoint['interval_weeks']} 週ごとに傾きが変われる。"
+                                     "点線は変化点の候補で、実際に傾きが変わったかは線の折れ方で判断）"}[cfg.trend]
+        base_html = (f'<h2>ベースラインの内訳</h2><p class="muted">{trend_desc}。下段は季節性とコントロール変数の効果。</p>'
+                     + fig_baseline(baseline, changepoint_dates or []))
+
     scen_html = ""
     if scenarios is not None and len(scenarios):
         scfmt = {"current_spend": "{:,.0f}", "scenario_spend": "{:,.0f}", "spend_change": "{:+,.0f}",
@@ -245,6 +273,8 @@ def build_report(path, *, cfg, summ, dec, pred, metrics, curves, decay, diagnost
 
 <h2>貢献度分解</h2>
 {fig_decomp(dec, channels)}
+
+{base_html}
 
 <h2>チャネル別 ROI</h2>
 <p class="muted">ROI = 期間内の増分売上 ÷ 支出。限界ROI = 支出を 1% 増やした場合の 追加売上 ÷ 追加支出。広告係数は正に制約されています。</p>

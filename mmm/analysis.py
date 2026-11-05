@@ -39,6 +39,20 @@ def decomposition(md: ModelData, fit: FitResult) -> pd.DataFrame:
     return df
 
 
+def baseline_components(md: ModelData, fit: FitResult) -> pd.DataFrame:
+    """ベースラインの内訳（事後平均, 元スケール）: 切片+トレンド・季節性・その他(コントロール)。"""
+    p = fit.posterior
+    T = len(md.y)
+    level = (p["intercept"][:, None] + p.get("trend", np.zeros((1, T)))) * md.y_scale
+    season = p.get("seasonality", np.zeros((1, T))) * md.y_scale
+    contrib = p["channel_contribution"].sum(axis=2) * md.y_scale
+    other = p["mu"] * md.y_scale - level - season - contrib
+    lo, hi = _q(level)
+    return pd.DataFrame({"date": md.dates.values, "trend_level": level.mean(axis=0),
+                         "trend_lo": lo, "trend_hi": hi, "seasonality": season.mean(axis=0),
+                         "controls": other.mean(axis=0)})
+
+
 def channel_summary(md: ModelData, fit: FitResult, mmm: BayesianMMM) -> pd.DataFrame:
     """チャネル別の 総貢献・貢献シェア・ROI（94% 区間）・限界 ROI。"""
     p = fit.posterior

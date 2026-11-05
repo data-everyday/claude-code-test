@@ -50,7 +50,8 @@ def parse_multipliers(text: str) -> dict[str, float]:
 
 def build_config(*, csv_path: str, date_column: str, target_column: str, channels: str,
                  controls: str = "", speed: str = "fast", holdout_weeks: int = 0,
-                 seasonality: bool = True, trend: bool = True, max_lag: int = 8,
+                 seasonality: bool = True, trend: str | bool = "linear", max_lag: int = 13,
+                 changepoint_interval: int = 26, changepoint_scale: float = 0.05,
                  roi_prior_mean: float = 1.0, roi_prior_sd: float = 1.0,
                  opt_period_weeks: int = 52, budget_lower: float = 0.7,
                  budget_upper: float = 1.3, total_budget: float = 0,
@@ -72,7 +73,9 @@ def build_config(*, csv_path: str, date_column: str, target_column: str, channel
         "controls": ctls,
         "model": {
             "adstock_max_lag": int(max_lag),
-            "trend": bool(trend),
+            "trend": ({True: "linear", False: "none"}[trend] if isinstance(trend, bool) else trend),
+            "changepoint": {"interval_weeks": int(changepoint_interval),
+                            "prior_scale": float(changepoint_scale)},
             "seasonality": {"fourier_order": 2 if seasonality else 0, "period_weeks": 52.18},
             "default_roi_prior": {"median": float(roi_prior_mean), "sd": float(roi_prior_sd)},
         },

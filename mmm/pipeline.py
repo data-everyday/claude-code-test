@@ -55,6 +55,8 @@ def run(cfg: Config) -> dict:
     curves = analysis.response_curves(md, mmm, fit, float(rc["max_multiplier"]),
                                       int(rc["n_points"]), int(rc["n_draws"]))
     decay = analysis.adstock_decay(mmm, fit)
+    base = analysis.baseline_components(md, fit)
+    cp_dates = list(md.dates.iloc[md.changepoint_index]) if len(md.changepoint_index) else []
 
     opt = None
     if cfg.optimization.get("enabled", True):
@@ -72,6 +74,7 @@ def run(cfg: Config) -> dict:
     metrics.to_csv(out / "fit_metrics.csv", index=False)
     curves.to_csv(out / "response_curves.csv", index=False)
     decay.to_csv(out / "adstock_decay.csv", index=False)
+    base.to_csv(out / "baseline_components.csv", index=False)
     if opt:
         opt["table"].to_csv(out / "budget_optimization.csv", index=False)
     if fit.diagnostics.get("summary") is not None:
@@ -84,7 +87,8 @@ def run(cfg: Config) -> dict:
     report_path = out / "report.html"
     build_report(report_path, cfg=cfg, summ=summ, dec=dec, pred=pred, metrics=metrics,
                  curves=curves, decay=decay, diagnostics=fit.diagnostics, opt=opt,
-                 holdout_metrics=holdout_metrics, scenarios=scen)
+                 holdout_metrics=holdout_metrics, scenarios=scen, baseline=base,
+                 changepoint_dates=cp_dates)
     log.info("レポート出力: %s", report_path)
 
     if cfg.output_bq.get("enabled"):

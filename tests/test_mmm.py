@@ -202,3 +202,33 @@ def test_colab_build_config(tmp_path):
     assert cfg.sampler["draws"] == 500  # fast プリセット
     with pytest.raises(ValueError, match="CSV にない列名"):
         build_config(**{**kw, "target_column": "revenue"})
+
+
+def test_changepoint_design_and_lag_limits(tmp_path):
+    from mmm.data import changepoint_design
+
+    idx, basis = changepoint_design(104, {"interval_weeks": 26, "range": 0.9})
+    assert list(idx) == [26, 52, 78]
+    assert basis.shape == (104, 3)
+    assert np.all(basis[:27, 0] == 0) and basis[-1, 0] > 0  # 変化点以前は 0、以降は線形に増加
+
+    path = _write_cfg(tmp_path)
+    cfg = load_config(path, {"model.trend": "changepoint", "model.adstock_max_lag": 20})
+    assert cfg.trend == "changepoint" and cfg.max_lag == 20
+    assert load_config(path, {"model.trend": False}).trend == "none"
+    assert load_config(tmp_path / "c.yaml", {"model": {}}).max_lag == 13  # 既定 13
+    with pytest.raises(ValueError, match="1〜20"):
+        load_config(path, {"model.adstock_max_lag": 21})
+    with pytest.raises(ValueError, match="model.trend"):
+        load_config(path, {"model.trend": "wiggly"})
+
+
+def test_changepoint_fit_runs(tmp_path):
+    cfg = load_config(_write_cfg(tmp_path), {"model.trend": "changepoint",
+                                             "model.changepoint.interval_weeks": 20})
+    df = pd.read_csv(tmp_path / "d.csv")
+    md = build_model_data(validate_dataframe(df, cfg), cfg)
+    assert md.changepoint_basis.shape[1] == 3  # 80 週 × 0.9 / 20
+    fit = BayesianMMM(cfg, md).fit()
+    assert fit.posterior["changepoint_delta"].shape[1] == 3
+    assert fit.posterior["trend"].shape[1] == len(md.y)

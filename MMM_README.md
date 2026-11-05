@@ -9,9 +9,9 @@
 |---|---|
 | 推定 | PyMC (NUTS) によるベイズ推定。全結果に 94% 信用区間 |
 | 広告効果 | **常に正に制約**（既定は全チャネル ROI 事前 `LogNormal`。`HalfNormal` 係数にも切替可） |
-| adstock | チャネルごとに `geometric`（幾何減衰）/ `delayed`（ピークが遅れる）を選択。最大ラグも個別指定可 |
+| adstock | チャネルごとに `geometric`（幾何減衰）/ `delayed`（ピークが遅れる）を選択。最大ラグは既定 13 週（1〜20、チャネル別指定可） |
 | saturation | Hill 関数（半飽和点 K・形状 S）。S 字の応答も表現可 |
-| コントロール | トレンド・フーリエ季節性・任意の列（価格・プロモ等。符号制約 `positive`/`negative`/`free`） |
+| コントロール | トレンド（`linear` / 変化点付き `changepoint` / `none`）・フーリエ季節性・任意の列（価格・プロモ等。符号制約 `positive`/`negative`/`free`） |
 | 事前知識 | リフト試験等の ROI を `roi_prior: {median, sd}` で投入可能 |
 | 検証 | 収束診断（R-hat・ESS・divergence を警告）、末尾 N 週のホールドアウト検証（MAPE/RMSE/R²/区間被覆率） |
 | 最適化 | 総予算固定＋チャネル別上下限（現状比倍率）で期待貢献を最大化 |
@@ -75,7 +75,7 @@ BigQuery から読む場合は `mmm_config.yaml` の `data.source: bigquery` と
 ## モデル
 
 ```
-y[t]/mean(y) = intercept + trend·t + Σ fourier + Σ γ_k·control_k[t]
+y[t]/mean(y) = intercept + trend(t) + Σ fourier + Σ γ_k·control_k[t]
              + Σ_c β_c · Hill(adstock(spend_c / max(spend_c))[t]; K_c, S_c) + ε
 ```
 
@@ -88,6 +88,27 @@ y[t]/mean(y) = intercept + trend·t + Σ fourier + Σ γ_k·control_k[t]
   - median/sd はチャネル別 `roi_prior`、未指定なら `model.default_roi_prior`（既定 median=1, sd=1 → 94%区間 ≈ 0.15〜6.6）。旧キー `mean` も可（意味は中央値）
   - 係数と飽和パラメータの相関が切れ、季節性と連動するチャネルでも推定が安定（divergence が減る）
   - `model.default_roi_prior: null` で従来の `β ~ HalfNormal(beta_prior_sigma)` に切替
+
+### トレンド
+
+| `model.trend` | 形 | 使いどころ |
+|---|---|---|
+| `linear`（既定） | 期間全体で 1 本の直線 `k·t`。週ごとの揺らぎはなく、ギザギザしない | 成長・縮小が一定 |
+| `changepoint` | 折れ線 `k·t + Σ δ_j·max(0, t − s_j)`。`interval_weeks` ごとに置いた候補点で傾きが変われる。`δ_j ~ Laplace(0, prior_scale)` で大半の候補は ≈0（折れない） | 途中で成長が鈍化・反転、構造変化がある |
+| `none` | なし | 期間が短い・定常 |
+
+- 状態空間モデル（ランダムウォーク）のように毎週揺らぐことはなく、`changepoint` でも「まっすぐな線が数か所で折れる」形
+- `prior_scale` を大きくすると柔軟になるが、大きすぎるとトレンドが広告効果を吸収する
+- 末尾 1 割（`range: 0.9`）には変化点を置かない（直近の傾きが不安定になるため）
+- 合成データ（途中で傾きが +15 → −25/週）では、`linear` はホールドアウト MAPE 9.8%・TV の ROI を過小推定（真値 1.51 → 1.02）、
+  `changepoint` は MAPE 3.7%・ROI 1.53 と改善
+- レポートの「ベースラインの内訳」と `baseline_components.csv` でトレンド・季節性を確認できる
+
+### adstock の最大ラグ
+
+- `model.adstock_max_lag`（既定 13 週、1〜20）。チャネル別は `channels[].max_lag`
+- 「効果を何週先まで考慮するか」の打ち切りで、効果の実際の長さは推定される減衰率 α（delayed は θ も）で決まる
+- 長くしても計算時間はほぼ変わらないが、データ先頭の (ラグ−1) 週は過去の支出が無いため効果がやや過小になる
 
 ### ROI 事前の注意
 
@@ -107,6 +128,7 @@ y[t]/mean(y) = intercept + trend·t + Σ fourier + Σ γ_k·control_k[t]
 | `holdout_metrics.csv` | ホールドアウト検証結果 |
 | `response_curves.csv` | 応答曲線（支出 0〜2 倍） |
 | `adstock_decay.csv` | ラグ別 adstock 重み |
+| `baseline_components.csv` | ベースラインの内訳（切片+トレンド・季節性・コントロール） |
 | `budget_optimization.csv` | 最適予算配分 |
 | `scenarios.csv` | シナリオ試算結果 |
 | `posterior_summary.csv` / `posterior.nc` | 事後分布の要約・全サンプル |

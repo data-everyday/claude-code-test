@@ -8,6 +8,8 @@ from typing import Any
 import yaml
 
 ADSTOCK_TYPES = {"geometric", "delayed"}
+TREND_TYPES = {"none", "linear", "changepoint"}
+MAX_LAG_LIMIT = 20  # adstock の最大ラグの上限（週）
 SIGNS = {"positive", "negative", "free"}
 
 
@@ -38,7 +40,8 @@ class Config:
     target_column: str
     channels: list[ChannelConfig]
     controls: list[ControlConfig]
-    trend: bool
+    trend: str  # none / linear / changepoint
+    changepoint: dict[str, Any]
     seasonality_order: int
     seasonality_period: float
     max_lag: int
@@ -125,7 +128,23 @@ def load_config(path: str | Path, overrides: dict[str, Any] | None = None) -> Co
         p = Path(csv_path)
         csv_path = str(p if p.is_absolute() else base_dir / p)
 
-    max_lag = int(_get(raw, "model.adstock_max_lag", 8))
+    max_lag = int(_get(raw, "model.adstock_max_lag", 13))
+    if not 1 <= max_lag <= MAX_LAG_LIMIT:
+        raise ValueError(f"model.adstock_max_lag は 1〜{MAX_LAG_LIMIT} で指定してください: {max_lag}")
+
+    # トレンド: true/false（旧形式）または none / linear / changepoint
+    trend = _get(raw, "model.trend", "linear")
+    trend = {True: "linear", False: "none"}.get(trend, trend) if isinstance(trend, bool) else trend
+    if trend not in TREND_TYPES:
+        raise ValueError(f"model.trend は {sorted(TREND_TYPES)} のいずれか: {trend}")
+    changepoint = {"interval_weeks": 26, "prior_scale": 0.05, "range": 0.9,
+                   **(_get(raw, "model.changepoint", {}) or {})}
+    if changepoint["interval_weeks"] < 4:
+        raise ValueError("model.changepoint.interval_weeks は 4 以上にしてください")
+    if not 0 < changepoint["range"] <= 1:
+        raise ValueError("model.changepoint.range は 0〜1 で指定してください")
+    if changepoint["prior_scale"] <= 0:
+        raise ValueError("model.changepoint.prior_scale は正の値")
 
     # 全チャネル共通の ROI 事前（null で無効化 → HalfNormal 係数）
     default_roi = _get(raw, "model.default_roi_prior", {"median": 1.0, "sd": 1.0})
@@ -146,6 +165,8 @@ def load_config(path: str | Path, overrides: dict[str, Any] | None = None) -> Co
         if c.roi_prior_mean is None and c.roi_prior_sd is None and default_roi:
             c.roi_prior_mean = default_roi.get("median", default_roi.get("mean"))
             c.roi_prior_sd = default_roi.get("sd")
+        if c.max_lag is not None and not 1 <= int(c.max_lag) <= MAX_LAG_LIMIT:
+            raise ValueError(f"{c.name}: max_lag は 1〜{MAX_LAG_LIMIT} で指定してください")
         if c.adstock not in ADSTOCK_TYPES:
             raise ValueError(f"{c.name}: adstock は {ADSTOCK_TYPES} のいずれか")
         if (c.roi_prior_mean is None) != (c.roi_prior_sd is None):
@@ -207,7 +228,8 @@ def load_config(path: str | Path, overrides: dict[str, Any] | None = None) -> Co
         target_column=_get(raw, "data.target_column", "sales"),
         channels=channels,
         controls=controls,
-        trend=bool(_get(raw, "model.trend", True)),
+        trend=trend,
+        changepoint=changepoint,
         seasonality_order=int(_get(raw, "model.seasonality.fourier_order", 2)),
         seasonality_period=float(_get(raw, "model.seasonality.period_weeks", 52.18)),
         max_lag=max_lag,
