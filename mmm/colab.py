@@ -74,7 +74,7 @@ def build_config(*, csv_path: str, date_column: str, target_column: str, channel
             "adstock_max_lag": int(max_lag),
             "trend": bool(trend),
             "seasonality": {"fourier_order": 2 if seasonality else 0, "period_weeks": 52.18},
-            "default_roi_prior": {"mean": float(roi_prior_mean), "sd": float(roi_prior_sd)},
+            "default_roi_prior": {"median": float(roi_prior_mean), "sd": float(roi_prior_sd)},
         },
         "sampler": {"speed": speed, "nuts_sampler": "auto"},
         "validation": {"holdout_weeks": int(holdout_weeks), "refit_full": True},

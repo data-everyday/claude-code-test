@@ -21,8 +21,8 @@ channels:
     column: tv_spend
     adstock: delayed              # geometric / delayed（ピークが遅れて来る）
     # max_lag: 8                  # チャネル個別の最大ラグ（省略時 model.adstock_max_lag）
-    # roi_prior:                  # 任意: リフト試験等の知見で上書き → ROI ~ LogNormal(log(mean), sd)
-    #   mean: 1.5
+    # roi_prior:                  # 任意: リフト試験等の知見で上書き → ROI ~ LogNormal(log(median), sd)
+    #   median: 1.5
     #   sd: 0.4
   - name: search
     column: search_spend
@@ -44,10 +44,10 @@ model:
   seasonality:
     fourier_order: 2              # 0 で季節性なし
     period_weeks: 52.18
-  # 全チャネル共通の ROI 事前（roi_prior 未指定チャネルに適用）。中央値 1, 94%区間 ≈ [0.15, 6.5]
+  # 全チャネル共通の ROI 事前（roi_prior 未指定チャネルに適用）。中央値 1, 94%区間 ≈ [0.15, 6.6]。sd は対数スケールの幅（0.5 で ≈[0.4, 2.6]、1.5 で ≈[0.06, 17]）
   # null にすると係数 ~ HalfNormal(beta_prior_sigma) に切替
   default_roi_prior:
-    mean: 1.0
+    median: 1.0
     sd: 1.0
   beta_prior_sigma: 1.0
 

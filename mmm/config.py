@@ -18,7 +18,7 @@ class ChannelConfig:
     adstock: str = "geometric"
     max_lag: int | None = None
     # 任意: ROI 事前分布（指定時は LogNormal(log(mean), sd) を ROI に置く）
-    roi_prior_mean: float | None = None
+    roi_prior_mean: float | None = None  # LogNormal の中央値（設定キーは median）
     roi_prior_sd: float | None = None  # 対数スケールの標準偏差
 
 
@@ -128,7 +128,9 @@ def load_config(path: str | Path, overrides: dict[str, Any] | None = None) -> Co
     max_lag = int(_get(raw, "model.adstock_max_lag", 8))
 
     # 全チャネル共通の ROI 事前（null で無効化 → HalfNormal 係数）
-    default_roi = _get(raw, "model.default_roi_prior", {"mean": 1.0, "sd": 1.0})
+    default_roi = _get(raw, "model.default_roi_prior", {"median": 1.0, "sd": 1.0})
+    if default_roi is not None and not isinstance(default_roi, dict):
+        raise ValueError("model.default_roi_prior は {median:, sd:} か null で指定してください")
 
     channels = []
     for ch in _get(raw, "channels", []) or []:
@@ -137,18 +139,19 @@ def load_config(path: str | Path, overrides: dict[str, Any] | None = None) -> Co
             column=ch.get("column", ch["name"]),
             adstock=ch.get("adstock", "geometric"),
             max_lag=ch.get("max_lag"),
-            roi_prior_mean=_get(ch, "roi_prior.mean"),
+            # LogNormal の中心は「中央値」。旧キー mean も受け付ける
+            roi_prior_mean=_get(ch, "roi_prior.median", _get(ch, "roi_prior.mean")),
             roi_prior_sd=_get(ch, "roi_prior.sd"),
         )
         if c.roi_prior_mean is None and c.roi_prior_sd is None and default_roi:
-            c.roi_prior_mean = default_roi.get("mean")
+            c.roi_prior_mean = default_roi.get("median", default_roi.get("mean"))
             c.roi_prior_sd = default_roi.get("sd")
         if c.adstock not in ADSTOCK_TYPES:
             raise ValueError(f"{c.name}: adstock は {ADSTOCK_TYPES} のいずれか")
         if (c.roi_prior_mean is None) != (c.roi_prior_sd is None):
-            raise ValueError(f"{c.name}: roi_prior は mean と sd を両方指定してください")
+            raise ValueError(f"{c.name}: roi_prior は median と sd を両方指定してください")
         if c.roi_prior_mean is not None and c.roi_prior_mean <= 0:
-            raise ValueError(f"{c.name}: roi_prior.mean は正の値")
+            raise ValueError(f"{c.name}: roi_prior.median は正の値")
         channels.append(c)
     if not channels:
         raise ValueError("channels を 1 つ以上指定してください")

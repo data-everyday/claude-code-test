@@ -65,7 +65,7 @@ def _write_cfg(tmp_path, extra=""):
     (tmp_path / "c.yaml").write_text(f"""
 data: {{source: csv, csv_path: d.csv, date_column: date, target_column: sales}}
 channels:
-  - {{name: tv, column: tv_spend, adstock: delayed, roi_prior: {{mean: 1.5, sd: 0.5}}}}
+  - {{name: tv, column: tv_spend, adstock: delayed, roi_prior: {{median: 1.5, sd: 0.5}}}}
   - {{name: search, column: search_spend, max_lag: 4}}
   - {{name: social, column: social_spend}}
 controls: [{{column: price, sign: negative}}, promo]
