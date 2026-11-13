@@ -13,6 +13,7 @@ import matplotlib
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt  # noqa: E402
+import matplotlib.ticker  # noqa: E402,F401
 import numpy as np  # noqa: E402
 import pandas as pd  # noqa: E402
 
@@ -76,6 +77,36 @@ def fig_baseline(base: pd.DataFrame, cp_dates: list) -> str:
     ax2.axhline(0, color="#999", lw=0.6)
     ax2.legend(loc="upper left", fontsize=8, frameon=False, ncol=2)
     for a in axes:
+        a.spines[["top", "right"]].set_visible(False)
+    fig.tight_layout()
+    return _img(fig)
+
+
+def fig_share(summ: pd.DataFrame) -> str:
+    """上: 出稿金額の割合（合計 100%）／下: 全売上に対する貢献割合（合計 = 広告貢献シェア）。"""
+    n = len(summ)
+    colors = PALETTE[:n]
+    y = np.arange(n)
+    fig, axes = plt.subplots(2, 1, figsize=(8, 0.9 * n + 2.6))
+    ax = axes[0]
+    ax.barh(y, summ["spend_share"] * 100, color=colors, alpha=0.85)
+    for i, v in enumerate(summ["spend_share"] * 100):
+        ax.text(v, i, f" {v:.1f}%", va="center", fontsize=9)
+    ax.set_title("Share of media spend (total = 100%)", fontsize=10, loc="left")
+    ax.set_xlim(0, max(summ["spend_share"].max() * 100 * 1.2, 1))
+
+    ax = axes[1]
+    v = summ["contribution_share"] * 100
+    ax.barh(y, v, color=colors, alpha=0.85)
+    for i, val in enumerate(v):
+        ax.text(val, i, f" {val:.1f}%", va="center", fontsize=9)
+    ax.set_title(f"Contribution to total sales (sum = media contribution {v.sum():.1f}%)",
+                 fontsize=10, loc="left")
+    ax.set_xlim(0, max(v.max() * 1.2, 1))
+    for a in axes:
+        a.set_yticks(y, summ["channel"])
+        a.invert_yaxis()
+        a.xaxis.set_major_formatter(matplotlib.ticker.FuncFormatter(lambda x, _: f"{x:.0f}%"))
         a.spines[["top", "right"]].set_visible(False)
     fig.tight_layout()
     return _img(fig)
@@ -197,7 +228,8 @@ def build_report(path, *, cfg, summ, dec, pred, metrics, curves, decay, diagnost
                         f'{fig_fit(holdout_metrics.attrs["pred"])}')
 
     sfmt = {"spend": "{:,.0f}", "contribution_mean": "{:,.0f}", "contribution_lo": "{:,.0f}",
-            "contribution_hi": "{:,.0f}", "contribution_share": "{:.1%}", "roi_mean": "{:.2f}",
+            "contribution_hi": "{:,.0f}", "contribution_share": "{:.1%}", "spend_share": "{:.1%}",
+            "contribution_share_lo": "{:.1%}", "contribution_share_hi": "{:.1%}", "roi_mean": "{:.2f}",
             "roi_lo": "{:.2f}", "roi_hi": "{:.2f}", "marginal_roi": "{:.2f}",
             "roi_prior_median": "{:.3g}", "roi_prior_sd": "{:.2f}",
             "adstock_alpha": "{:.2f}", "adstock_theta": "{:.1f}", "hill_K": "{:.2f}",
@@ -276,6 +308,12 @@ def build_report(path, *, cfg, summ, dec, pred, metrics, curves, decay, diagnost
 {fig_decomp(dec, channels)}
 
 {base_html}
+
+<h2>出稿割合と売上貢献割合</h2>
+<p class="muted">上：広告費全体に占める各チャネルの出稿金額の割合（合計 100%）。
+下：全売上（KPI）に占める各チャネルの貢献の割合。全チャネルの合計が広告貢献シェア（{ad_share:.1%}）になります。
+上より下の比率が相対的に大きいチャネルほど、費用対効果が高いことを示します（貢献の 94% 区間は下の表の contribution_share_lo / hi）。</p>
+{fig_share(summ)}
 
 <h2>チャネル別 ROI</h2>
 <p class="muted">ROI = 期間内の KPI 増分 ÷ 支出（KPI の単位あたり／広告費 1 単位）。限界ROI = 支出を 1% 増やした場合の 追加 KPI ÷ 追加支出。広告係数は正に制約されています。
