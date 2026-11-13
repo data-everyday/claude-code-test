@@ -59,8 +59,15 @@ def build_config(*, csv_path: str, date_column: str, target_column: str, channel
                  roi_prior_median: float = 1.0, roi_prior_sd: float = 1.0,
                  opt_period_weeks: int = 52, budget_lower: float = 0.7,
                  budget_upper: float = 1.3, total_budget: float = 0,
-                 output_dir: str = "mmm_output") -> dict:
+                 output_dir: str = "mmm_output", **old_kwargs) -> dict:
     """フォーム値 → mmm_config.yaml と同じ構造の dict。CSV の列も検証する。"""
+    if old_kwargs:
+        raise ValueError(
+            "このノートブックは古い版です（フォーム項目が変わりました）。"
+            "ブラウザで次の URL を開き直し、最新のノートブックで ① から実行してください: "
+            "https://colab.research.google.com/github/data-everyday/claude-code-test/blob/"
+            "claude/laughing-albattani-3u9cqu/mmm_colab.ipynb"
+            f"（不明な項目: {sorted(old_kwargs)}）")
     chs = parse_channels(channels)
     ctls = parse_controls(controls)
 
