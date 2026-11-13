@@ -268,3 +268,22 @@ def test_saturation_shape_options(tmp_path):
     path.write_text(raw.replace("saturation: s", "saturation: z"))
     with pytest.raises(ValueError, match="saturation"):
         load_config(path)
+
+
+def test_optimizer_moves_when_kpi_much_smaller_than_spend(tmp_path):
+    """KPI が広告費より桁違いに小さくても最適化が初期値で止まらない（回帰テスト）。"""
+    from mmm.optimize import optimize_budget
+
+    cfg = load_config(_write_cfg(tmp_path))
+    df = pd.read_csv(tmp_path / "d.csv")
+    for c in ["tv_spend", "search_spend", "social_spend"]:
+        df[c] = df[c] * 10000
+    df["sales"] = df["sales"] / 100
+    md = build_model_data(validate_dataframe(df, cfg), cfg)
+    mmm = BayesianMMM(cfg, md)
+    fit = mmm.fit()
+    res = optimize_budget(md, mmm, fit, cfg.optimization)
+    m = res["table"]["multiplier"].to_numpy()
+    assert np.abs(m - 1).max() > 0.01
+    assert res["table"]["optimal_spend"].sum() == pytest.approx(res["table"]["current_spend"].sum(),
+                                                                rel=1e-4)

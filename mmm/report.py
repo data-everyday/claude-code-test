@@ -82,32 +82,30 @@ def fig_baseline(base: pd.DataFrame, cp_dates: list) -> str:
     return _img(fig)
 
 
-def fig_share(summ: pd.DataFrame) -> str:
-    """上: 出稿金額の割合（合計 100%）／下: 全売上に対する貢献割合（合計 = 広告貢献シェア）。"""
-    n = len(summ)
-    colors = PALETTE[:n]
-    y = np.arange(n)
-    fig, axes = plt.subplots(2, 1, figsize=(8, 0.9 * n + 2.6))
-    ax = axes[0]
-    ax.barh(y, summ["spend_share"] * 100, color=colors, alpha=0.85)
-    for i, v in enumerate(summ["spend_share"] * 100):
-        ax.text(v, i, f" {v:.1f}%", va="center", fontsize=9)
-    ax.set_title("Share of media spend (total = 100%)", fontsize=10, loc="left")
-    ax.set_xlim(0, max(summ["spend_share"].max() * 100 * 1.2, 1))
+NAVY = "#1b2a4a"  # 出稿（spend）を表す色
+LIGHT_BLUE = "#7cc4f0"  # 貢献（contribution）を表す色
 
-    ax = axes[1]
-    v = summ["contribution_share"] * 100
-    ax.barh(y, v, color=colors, alpha=0.85)
-    for i, val in enumerate(v):
-        ax.text(val, i, f" {val:.1f}%", va="center", fontsize=9)
-    ax.set_title(f"Contribution to total sales (sum = media contribution {v.sum():.1f}%)",
-                 fontsize=10, loc="left")
-    ax.set_xlim(0, max(v.max() * 1.2, 1))
-    for a in axes:
-        a.set_yticks(y, summ["channel"])
-        a.invert_yaxis()
-        a.xaxis.set_major_formatter(matplotlib.ticker.FuncFormatter(lambda x, _: f"{x:.0f}%"))
-        a.spines[["top", "right"]].set_visible(False)
+
+def fig_share(summ: pd.DataFrame) -> str:
+    """媒体ごとに 出稿割合（ネイビー, 合計 100%）と 売上貢献割合（水色, 合計 = 広告貢献シェア）を並べる。"""
+    n = len(summ)
+    y = np.arange(n)
+    h = 0.38
+    sp = summ["spend_share"].to_numpy() * 100
+    ct = summ["contribution_share"].to_numpy() * 100
+    fig, ax = plt.subplots(figsize=(8, 0.75 * n + 1.4))
+    ax.barh(y - h / 2, sp, height=h, color=NAVY, label="Share of spend (total 100%)")
+    ax.barh(y + h / 2, ct, height=h, color=LIGHT_BLUE,
+            label=f"Contribution to total sales (total {ct.sum():.1f}%)")
+    for i in range(n):
+        ax.text(sp[i], y[i] - h / 2, f" {sp[i]:.1f}%", va="center", fontsize=8.5)
+        ax.text(ct[i], y[i] + h / 2, f" {ct[i]:.1f}%", va="center", fontsize=8.5)
+    ax.set_yticks(y, summ["channel"])
+    ax.invert_yaxis()
+    ax.set_xlim(0, max(sp.max(), ct.max()) * 1.15 + 1)
+    ax.xaxis.set_major_formatter(matplotlib.ticker.FuncFormatter(lambda x, _: f"{x:.0f}%"))
+    ax.legend(fontsize=8, frameon=False, loc="lower right")
+    ax.spines[["top", "right"]].set_visible(False)
     fig.tight_layout()
     return _img(fig)
 
@@ -190,17 +188,33 @@ def fig_adstock(decay: pd.DataFrame) -> str:
     return _img(fig)
 
 
+def _fmt_money(v: float) -> str:
+    for unit, d in (("B", 1e9), ("M", 1e6), ("K", 1e3)):
+        if abs(v) >= d:
+            return f"{v / d:,.1f}{unit}"
+    return f"{v:,.0f}"
+
+
 def fig_opt(table: pd.DataFrame) -> str:
-    fig, ax = plt.subplots(figsize=(7, 0.55 * len(table) + 1.2))
-    y = np.arange(len(table))
-    ax.barh(y - 0.2, table["current_spend"], height=0.4, color="#c9ced6", label="current")
-    ax.barh(y + 0.2, table["optimal_spend"], height=0.4, color="#2a6fdb", label="optimal")
+    """媒体ごとの出稿の変化率（金額の大小に関係なく変化が見えるように）。"""
+    n = len(table)
+    y = np.arange(n)
+    pct = table["spend_change_pct"].to_numpy()
+    fig, ax = plt.subplots(figsize=(8, 0.55 * n + 1.3))
+    ax.barh(y, pct, color=NAVY, height=0.55)
+    ax.axvline(0, color="#999", lw=0.8)
+    span = max(np.abs(pct).max(), 5)
+    for i, r in enumerate(table.itertuples()):
+        label = (f"{r.spend_change_pct:+.1f}%  ({_fmt_money(r.current_spend)} → "
+                 f"{_fmt_money(r.optimal_spend)})")
+        ax.text(pct[i] + (span * 0.03 if pct[i] >= 0 else -span * 0.03), i, label,
+                va="center", ha="left" if pct[i] >= 0 else "right", fontsize=8.5)
+    ax.set_xlim(-span * 2.2, span * 2.2)
     ax.set_yticks(y, table["channel"])
     ax.invert_yaxis()
-    ax.legend(fontsize=8, frameon=False)
+    ax.set_xlabel("change in spend vs current (%)")
     ax.spines[["top", "right"]].set_visible(False)
     return _img(fig)
-
 
 CSS = """
 :root{--fg:#1d2330;--muted:#5d6675;--bg:#fff;--card:#f6f7f9;--line:#e2e5ea;--warn:#b54708;--warnbg:#fff4e5}

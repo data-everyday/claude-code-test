@@ -45,17 +45,20 @@ def optimize_budget(md: ModelData, mmm: BayesianMMM, fit: FitResult, opt_cfg: di
                          f"[{min_b:,.0f}, {max_b:,.0f}] の外です。bounds を見直してください")
 
     params = subsample(fit.posterior, int(opt_cfg.get("n_draws", 200)))
-    scale = max(cur_spend.sum(), 1.0)
+    # 正規化: 目的関数は「現状の広告貢献合計」、制約は「現状の出稿合計」で割り、どちらも O(1) にする。
+    # （KPI と広告費の桁が大きく違うと、目的関数が極小になりソルバーが初期値で止まるため）
+    spend_scale = max(cur_spend.sum(), 1.0)
 
     def total(m):
         return contribution_given_multipliers(md, mmm, params, m, window).mean(axis=0).sum()
 
     def obj(m):
-        return -total(m) / scale
+        return -total(m) / contrib_scale
 
     # 初期値: 予算に合わせて一律倍率 → bounds 内にクリップ
     x0 = np.clip(np.full(C, budget / cur_spend.sum()), lb, ub)
-    cons = [{"type": "eq", "fun": lambda m: (m * cur_spend).sum() / scale - budget / scale}]
+    contrib_scale = max(abs(total(np.ones(C))), 1e-12)
+    cons = [{"type": "eq", "fun": lambda m: (m * cur_spend).sum() / spend_scale - budget / spend_scale}]
     res = minimize(obj, x0, method="SLSQP", bounds=list(zip(lb, ub)), constraints=cons,
                    options={"maxiter": 200, "ftol": 1e-9})
     if not res.success:
