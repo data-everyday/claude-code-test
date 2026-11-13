@@ -51,9 +51,45 @@ def parse_multipliers(text: str) -> dict[str, float]:
     return out
 
 
+SEASON_CHOICES = {"1年（52週）": 52.18, "半年（26週）": 26.0, "四半期（13週）": 13.0, "なし": None}
+
+
+def parse_season(value) -> float | None:
+    """フォームの季節性の選択 → 周期（週）。True/False（旧形式）や数値も受け付ける。"""
+    if value is True:
+        return 52.18
+    if value is False or value is None:
+        return None
+    if isinstance(value, (int, float)):
+        return float(value) if value > 0 else None
+    if value in SEASON_CHOICES:
+        return SEASON_CHOICES[value]
+    try:
+        return float(str(value).replace("週", "").strip())
+    except ValueError:
+        raise ValueError(f"季節性の周期が読み取れません: {value}（例: 52.18, 26, 13, なし）")
+
+
+def parse_custom_events(text: str) -> list[dict]:
+    """'セール=2024-07-01~2024-07-14, 2025-07-01~2025-07-14; 決算=2024-03-25~2024-03-31'
+    -> [{name, periods}]。区切りは ; 、名前と期間は = 、期間どうしは , 。1 日だけなら日付 1 つでも可。"""
+    out = []
+    text = (text or "").replace("；", ";").replace("＝", "=").replace("、", ",").replace("，", ",")
+    for item in text.split(";"):
+        if not item.strip():
+            continue
+        if "=" not in item:
+            raise ValueError(f"「名前=開始~終了」の形で入力してください（入力: {item.strip()}）")
+        name, periods = item.split("=", 1)
+        out.append({"name": name.strip(),
+                    "periods": [p.strip() for p in periods.split(",") if p.strip()]})
+    return out
+
+
 def build_config(*, csv_path: str, date_column: str, target_column: str, channels: str,
                  controls: str = "", speed: str = "fast", holdout_weeks: int = 0,
-                 seasonality: bool = True, trend: str | bool = "linear", max_lag: int = 13,
+                 seasonality: str | bool | float = "1年（52週）",
+                 events_builtin: list[str] | None = None, events_custom: str = "", trend: str | bool = "linear", max_lag: int = 13,
                  changepoint_interval: int = 26, changepoint_scale: float = 0.05,
                  roi_prior_mode: str = "auto", ad_share: float = 0.2,
                  roi_prior_median: float = 1.0, roi_prior_sd: float = 1.0,
@@ -87,12 +123,15 @@ def build_config(*, csv_path: str, date_column: str, target_column: str, channel
             "trend": ({True: "linear", False: "none"}[trend] if isinstance(trend, bool) else trend),
             "changepoint": {"interval_weeks": int(changepoint_interval),
                             "prior_scale": float(changepoint_scale)},
-            "seasonality": {"fourier_order": 2 if seasonality else 0, "period_weeks": 52.18},
+            "seasonality": {"fourier_order": 2 if parse_season(seasonality) else 0,
+                            "period_weeks": parse_season(seasonality) or 52.18},
             "default_roi_prior": (
                 {"mode": "auto", "ad_share": float(ad_share), "sd": float(roi_prior_sd)}
                 if roi_prior_mode == "auto"
                 else {"mode": "manual", "median": float(roi_prior_median), "sd": float(roi_prior_sd)}),
         },
+        "events": {"builtin": list(events_builtin or []),
+                   "custom": parse_custom_events(events_custom)},
         "sampler": {"speed": speed, "nuts_sampler": "auto"},
         "validation": {"holdout_weeks": int(holdout_weeks), "refit_full": True},
         "optimization": {"enabled": True, "period_weeks": int(opt_period_weeks),

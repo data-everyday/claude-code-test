@@ -30,6 +30,7 @@ class ChannelConfig:
 class ControlConfig:
     column: str
     sign: str = "free"
+    generated: bool = False  # イベントフラグなど、ツールが自動生成する列
 
 
 @dataclass
@@ -46,6 +47,8 @@ class Config:
     changepoint: dict[str, Any]
     seasonality_order: int
     seasonality_period: float
+    events: list[dict[str, Any]]  # [{name, builtin, periods, sign}]
+    event_week_anchor: str  # date 列が週の初日なら start、最終日なら end
     max_lag: int
     beta_prior_sigma: float
     # roi_prior 未指定チャネルに使う ROI 事前。None で HalfNormal 係数
@@ -69,6 +72,8 @@ def _get(d: dict, path: str, default=None):
         cur = cur[key]
     return cur
 
+
+EVENT_PREFIX = "event_"
 
 SPEED_PRESETS = {
     # 試行錯誤用。数分で終わるが、収束警告が出やすい
@@ -142,6 +147,49 @@ def parse_default_roi(spec) -> dict[str, Any] | None:
     if not 0 < share < 1:
         raise ValueError("model.default_roi_prior.ad_share は 0〜1 の間（例: 0.2 = 20%）")
     return {"mode": "auto", "ad_share": share, "sd": sd}
+
+
+def parse_events(spec) -> tuple[list[dict[str, Any]], str]:
+    """events 設定を解釈する。
+
+    events:
+      week_anchor: start            # date 列が週の初日なら start、最終日なら end
+      builtin: [year_end, golden_week, obon]   # 組み込み（年末年始・GW・お盆）。{name, sign} も可
+      custom:
+        - name: summer_sale
+          sign: positive            # free / positive / negative（既定 free）
+          periods: [[2024-07-01, 2024-07-14], "2025-07-01~2025-07-14"]
+    """
+    from .events import BUILTIN_EVENTS, parse_custom_periods
+
+    if not spec:
+        return [], "start"
+    anchor = spec.get("week_anchor", "start")
+    if anchor not in ("start", "end"):
+        raise ValueError("events.week_anchor は start か end です")
+    out = []
+    for b in spec.get("builtin") or []:
+        b = {"name": b} if isinstance(b, str) else dict(b)
+        if b["name"] not in BUILTIN_EVENTS:
+            raise ValueError(f"組み込みイベント {b['name']} はありません（{sorted(BUILTIN_EVENTS)}）")
+        out.append({"name": b["name"], "builtin": True, "periods": None,
+                    "sign": b.get("sign", "free")})
+    for c in spec.get("custom") or []:
+        name = str(c.get("name", "")).strip()
+        if not name or not name.replace("_", "").isalnum():
+            raise ValueError(f"イベント名は英数字と _ で指定してください: {name!r}")
+        periods = parse_custom_periods(c.get("periods"))
+        if not periods:
+            raise ValueError(f"イベント {name}: periods を 1 つ以上指定してください")
+        out.append({"name": name, "builtin": False, "periods": periods,
+                    "sign": c.get("sign", "free")})
+    names = [e["name"] for e in out]
+    if len(set(names)) != len(names):
+        raise ValueError("イベント名が重複しています")
+    for e in out:
+        if e["sign"] not in SIGNS:
+            raise ValueError(f"イベント {e['name']}: sign は {SIGNS} のいずれか")
+    return out, anchor
 
 
 def load_config(path: str | Path, overrides: dict[str, Any] | None = None) -> Config:
@@ -220,6 +268,18 @@ def load_config(path: str | Path, overrides: dict[str, Any] | None = None) -> Co
             raise ValueError(f"control {c.column}: sign は {SIGNS} のいずれか")
         controls.append(c)
 
+    events, week_anchor = parse_events(_get(raw, "events"))
+    existing = {c.column for c in controls}
+    for ev in events:
+        col = EVENT_PREFIX + ev["name"]
+        if col in existing:
+            raise ValueError(f"イベント {ev['name']} の列名 {col} が既存のコントロール列と重複しています")
+        controls.append(ControlConfig(column=col, sign=ev["sign"], generated=True))
+
+    season_period = float(_get(raw, "model.seasonality.period_weeks", 52.18))
+    if season_period < 4:
+        raise ValueError("model.seasonality.period_weeks は 4 週以上にしてください")
+
     speed = _get(raw, "sampler.speed", "standard")
     if speed not in SPEED_PRESETS:
         raise ValueError(f"sampler.speed は {list(SPEED_PRESETS)} のいずれか: {speed}")
@@ -262,7 +322,9 @@ def load_config(path: str | Path, overrides: dict[str, Any] | None = None) -> Co
         trend=trend,
         changepoint=changepoint,
         seasonality_order=int(_get(raw, "model.seasonality.fourier_order", 2)),
-        seasonality_period=float(_get(raw, "model.seasonality.period_weeks", 52.18)),
+        seasonality_period=season_period,
+        events=events,
+        event_week_anchor=week_anchor,
         max_lag=max_lag,
         beta_prior_sigma=float(_get(raw, "model.beta_prior_sigma", 1.0)),
         default_roi=default_roi,

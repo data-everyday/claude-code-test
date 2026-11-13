@@ -8,6 +8,7 @@ import numpy as np
 import pandas as pd
 
 from .config import Config
+from .events import add_event_columns
 from .transforms import fourier_features
 
 log = logging.getLogger(__name__)
@@ -38,16 +39,24 @@ def _load_bigquery(cfg: Config) -> pd.DataFrame:
 
 
 def validate_dataframe(df: pd.DataFrame, cfg: Config) -> pd.DataFrame:
-    required = [cfg.date_column, cfg.target_column] + [c.column for c in cfg.channels] + [
-        c.column for c in cfg.controls
+    user_cols = [cfg.date_column, cfg.target_column] + [c.column for c in cfg.channels] + [
+        c.column for c in cfg.controls if not c.generated
     ]
-    missing = [c for c in required if c not in df.columns]
+    missing = [c for c in user_cols if c not in df.columns]
     if missing:
         raise ValueError(f"データに列がありません: {missing}")
 
-    df = df[required].copy()
+    df = df[user_cols].copy()
     df[cfg.date_column] = pd.to_datetime(df[cfg.date_column])
     df = df.sort_values(cfg.date_column).reset_index(drop=True)
+
+    # イベントフラグ列を生成（該当週なし・全週該当の列はコントロールから外す）
+    if cfg.events:
+        df, dropped = add_event_columns(df, cfg.date_column, cfg.events, cfg.event_week_anchor)
+        if dropped:
+            cfg.controls = [c for c in cfg.controls if c.column not in dropped]
+            df = df.drop(columns=dropped)
+    required = user_cols + [c.column for c in cfg.controls if c.generated]
 
     if df[cfg.date_column].duplicated().any():
         raise ValueError("日付が重複しています（週次・全国単位の 1 行/週 を想定）")

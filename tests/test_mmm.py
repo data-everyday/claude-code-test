@@ -287,3 +287,41 @@ def test_optimizer_moves_when_kpi_much_smaller_than_spend(tmp_path):
     assert np.abs(m - 1).max() > 0.01
     assert res["table"]["optimal_spend"].sum() == pytest.approx(res["table"]["current_spend"].sum(),
                                                                 rel=1e-4)
+
+
+def test_event_flags_and_season_period(tmp_path):
+    from mmm.colab import build_config, parse_custom_events, parse_season, save_yaml
+    from mmm.events import builtin_periods, week_flags
+
+    # 週の初日基準: 2024-12-30(月)〜2025-01-05 の週は年末年始に該当、12-23 の週は非該当
+    dates = pd.Series(pd.to_datetime(["2024-12-23", "2024-12-30", "2025-01-06"]))
+    periods = builtin_periods("year_end", range(2023, 2026))
+    assert list(week_flags(dates, periods, "start")) == [1.0, 1.0, 0.0]  # 12/23 週は 12/29 を含む
+    assert list(week_flags(dates, periods, "end")) == [0.0, 1.0, 1.0]
+
+    assert parse_season("四半期（13週）") == 13.0 and parse_season("なし") is None
+    assert parse_season(True) == 52.18
+    assert parse_custom_events("夏セール=2024-07-01~2024-07-14, 2025-07-01; bf=2024-11-29") == [
+        {"name": "夏セール", "periods": ["2024-07-01~2024-07-14", "2025-07-01"]},
+        {"name": "bf", "periods": ["2024-11-29"]}]
+
+    csv = tmp_path / "d.csv"
+    generate(80).to_csv(csv, index=False)  # 2023-01-02 から 80 週
+    d = build_config(csv_path=str(csv), date_column="date", target_column="sales",
+                     channels="tv:tv_spend, search:search_spend", seasonality="四半期（13週）",
+                     events_builtin=["year_end", "golden_week"],
+                     events_custom="sale=2023-07-03~2023-07-09; future=2030-01-01")
+    cfg = load_config(save_yaml(d, str(tmp_path / "c.yaml")))
+    assert cfg.seasonality_period == 13.0
+    assert [c.column for c in cfg.controls] == ["event_year_end", "event_golden_week",
+                                                "event_sale", "event_future"]
+    df = validate_dataframe(pd.read_csv(csv), cfg)
+    # データ期間外のイベント(future)は除外される
+    assert "event_future" not in df.columns
+    assert [c.column for c in cfg.controls] == ["event_year_end", "event_golden_week", "event_sale"]
+    assert df["event_sale"].sum() == 1 and df["event_golden_week"].sum() >= 2
+    md = build_model_data(df, cfg)
+    assert md.control_names == ["event_year_end", "event_golden_week", "event_sale"]
+
+    with pytest.raises(ValueError, match="組み込みイベント"):
+        load_config(save_yaml({**d, "events": {"builtin": ["xmas"]}}, str(tmp_path / "e.yaml")))

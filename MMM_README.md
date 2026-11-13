@@ -139,6 +139,34 @@ ROI 事前の中央値 = ad_share × KPI 合計 ÷ 広告費合計      （既�
   `changepoint` は MAPE 3.7%・ROI 1.53 と改善
 - レポートの「ベースラインの内訳」と `baseline_components.csv` でトレンド・季節性を確認できる
 
+### 季節性
+
+- `model.seasonality.period_weeks`: 繰り返しの周期（週）。52.18=1年（既定）/ 26=半年 / 13=四半期
+- `model.seasonality.fourier_order`: 波の細かさ（既定 2、0 で季節性なし）
+- データが 1 年未満なら季節性は外し、イベントフラグや外部指標で季節要因を表すのがおすすめ。
+  13 週は「四半期ごとに同じパターンが繰り返される」場合のみ（年単位の季節変動は捉えられない）
+
+### イベント期間のフラグ（任意）
+
+年末年始・GW・セールなど、滑らかな季節性では捉えきれない短い山・谷を吸収するために、
+「その週が期間に 1 日でも重なれば 1」の列を自動で作り、コントロール変数に加えます。
+
+```yaml
+events:
+  week_anchor: start          # date 列が週の初日なら start、最終日なら end
+  builtin: [year_end, golden_week, obon]   # 年末年始(12/29-1/3)・GW(4/29-5/5)・お盆(8/13-8/16)
+  custom:
+    - name: summer_sale
+      sign: positive          # free / positive / negative（既定 free）
+      periods:
+        - [2024-07-01, 2024-07-14]
+        - 2025-07-01~2025-07-14
+```
+
+- データ期間内に該当週がないイベントは自動で除外
+- 合成データ（年末年始の週に +2,500）では、フラグなしだと山を説明できず R² 0.80・TV の ROI も不安定、
+  フラグありで効果 +2,412 を推定、R² 0.92 に改善
+
 ### adstock の最大ラグ
 
 - `model.adstock_max_lag`（既定 13 週、1〜20）。チャネル別は `channels[].max_lag`
