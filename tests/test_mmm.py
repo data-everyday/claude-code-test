@@ -131,6 +131,9 @@ def test_end_to_end_positive_effects(tmp_path):
     assert (opt["multiplier"] >= opt["lower_bound"] - 1e-9).all()
     assert (opt["multiplier"] <= opt["upper_bound"] + 1e-9).all()
     assert res["report"].exists()
+    pts = pd.read_csv(cfg.output_dir / "weekly_saturation_points.csv")
+    assert len(pts) == 80 * 3 and (pts["contribution"] >= 0).all()
+    assert (cfg.output_dir / "weekly_saturation_curve.csv").exists()
 
     sc = res["scenarios"]
     same = sc[(sc["scenario"] == "same") & (sc["channel"] == "TOTAL")].iloc[0]

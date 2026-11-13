@@ -5,8 +5,8 @@ import numpy as np
 import pandas as pd
 
 from .data import ModelData
-from .model import BayesianMMM, FitResult, saturated_np
-from .transforms import lag_stack
+from .model import BayesianMMM, FitResult, adstock_weights_np, saturated_np
+from .transforms import apply_adstock_np, hill_np, lag_stack
 
 HDI_LO, HDI_HI = 0.03, 0.97  # 94% 区間
 
@@ -134,6 +134,44 @@ def response_curves(md: ModelData, mmm: BayesianMMM, fit: FitResult,
                          "contribution_mean": res[:, i].mean(),
                          "contribution_lo": lo[i], "contribution_hi": hi[i]})
     return pd.DataFrame(rows)
+
+
+def weekly_saturation(md: ModelData, mmm: BayesianMMM, fit: FitResult, n_draws: int = 200,
+                      n_points: int = 60, max_ratio: float = 1.3
+                      ) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """週次の飽和曲線と実績週の点。
+
+    横軸 = その週に効いている出稿額（adstock 適用後。重みの合計が 1 なので単位は元の出稿額と同じ）
+    縦軸 = その週の貢献（KPI）
+    曲線: 0〜実績最大×max_ratio の出稿額に対する 貢献 = β·Hill(x/scale)·y_scale（事後平均と 94% 区間）
+    点:   実績の各週の (adstock 後出稿額, 貢献) の事後平均
+    """
+    p = subsample(fit.posterior, n_draws)
+    w = adstock_weights_np(mmm.spec, p["alpha"], p["theta"])  # (D, L, C)
+    ad = apply_adstock_np(mmm.xlag, w)  # (D, T, C) スケール済み
+    contrib = hill_np(ad, p["K"], p["S"]) * p["beta"][:, None, :] * md.y_scale  # (D, T, C)
+    ad_money = ad * md.spend_scale  # 元の出稿額の単位
+
+    curve_rows, point_rows = [], []
+    for i, ch in enumerate(md.channel_names):
+        xmax = float(ad_money[:, :, i].mean(axis=0).max()) * max_ratio
+        grid = np.linspace(0, xmax, n_points)
+        xs = grid / md.spend_scale[i]
+        D = len(p["beta"])
+        g = np.broadcast_to(xs[None, :, None], (D, n_points, 1))
+        yc = hill_np(g, p["K"][:, i:i + 1], p["S"][:, i:i + 1])[:, :, 0] * p["beta"][:, i:i + 1] \
+            * md.y_scale  # (D, n_points)
+        lo, hi = _q(yc)
+        for k in range(n_points):
+            curve_rows.append({"channel": ch, "effective_spend": grid[k],
+                               "contribution_mean": yc[:, k].mean(),
+                               "contribution_lo": lo[k], "contribution_hi": hi[k]})
+        for t in range(len(md.y)):
+            point_rows.append({"channel": ch, "date": md.dates.iloc[t],
+                               "spend": md.spend[t, i],
+                               "effective_spend": ad_money[:, t, i].mean(),
+                               "contribution": contrib[:, t, i].mean()})
+    return pd.DataFrame(curve_rows), pd.DataFrame(point_rows)
 
 
 def adstock_decay(mmm: BayesianMMM, fit: FitResult) -> pd.DataFrame:

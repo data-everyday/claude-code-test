@@ -55,6 +55,7 @@ def run(cfg: Config) -> dict:
     curves = analysis.response_curves(md, mmm, fit, float(rc["max_multiplier"]),
                                       int(rc["n_points"]), int(rc["n_draws"]))
     decay = analysis.adstock_decay(mmm, fit)
+    wk_curve, wk_points = analysis.weekly_saturation(md, mmm, fit)
     base = analysis.baseline_components(md, fit)
     cp_dates = list(md.dates.iloc[md.changepoint_index]) if len(md.changepoint_index) else []
 
@@ -73,6 +74,8 @@ def run(cfg: Config) -> dict:
     pred.to_csv(out / "predictions.csv", index=False)
     metrics.to_csv(out / "fit_metrics.csv", index=False)
     curves.to_csv(out / "response_curves.csv", index=False)
+    wk_curve.to_csv(out / "weekly_saturation_curve.csv", index=False)
+    wk_points.to_csv(out / "weekly_saturation_points.csv", index=False)
     decay.to_csv(out / "adstock_decay.csv", index=False)
     base.to_csv(out / "baseline_components.csv", index=False)
     if opt:
@@ -88,7 +91,8 @@ def run(cfg: Config) -> dict:
     build_report(report_path, cfg=cfg, summ=summ, dec=dec, pred=pred, metrics=metrics,
                  curves=curves, decay=decay, diagnostics=fit.diagnostics, opt=opt,
                  holdout_metrics=holdout_metrics, scenarios=scen, baseline=base,
-                 changepoint_dates=cp_dates)
+                 changepoint_dates=cp_dates, weekly_curve=wk_curve,
+                 weekly_points=wk_points)
     log.info("レポート出力: %s", report_path)
 
     if cfg.output_bq.get("enabled"):

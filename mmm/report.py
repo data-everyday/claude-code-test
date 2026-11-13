@@ -152,6 +152,32 @@ def fig_response(curves: pd.DataFrame, summ: pd.DataFrame) -> str:
     return _img(fig)
 
 
+def fig_weekly_saturation(curve: pd.DataFrame, points: pd.DataFrame, chans: list[str]) -> str:
+    n = len(chans)
+    cols = min(n, 3)
+    rows = int(np.ceil(n / cols))
+    fig, axes = plt.subplots(rows, cols, figsize=(4.2 * cols, 3.3 * rows), squeeze=False)
+    for i, ch in enumerate(chans):
+        ax = axes[i // cols][i % cols]
+        color = PALETTE[i % len(PALETTE)]
+        c = curve[curve["channel"] == ch]
+        pt_ = points[points["channel"] == ch]
+        ax.fill_between(c["effective_spend"], c["contribution_lo"], c["contribution_hi"],
+                        color=color, alpha=0.18, lw=0)
+        ax.plot(c["effective_spend"], c["contribution_mean"], color=color, lw=1.8)
+        ax.scatter(pt_["effective_spend"], pt_["contribution"], s=16, facecolors="none",
+                   edgecolors="#1d2330", linewidths=0.7, alpha=0.7, zorder=3)
+        ax.set_title(ch, fontsize=10)
+        ax.set_xlabel("weekly effective spend (after adstock)", fontsize=8)
+        ax.set_ylabel("weekly contribution", fontsize=8)
+        ax.tick_params(labelsize=7)
+        ax.spines[["top", "right"]].set_visible(False)
+    for j in range(n, rows * cols):
+        axes[j // cols][j % cols].axis("off")
+    fig.tight_layout()
+    return _img(fig)
+
+
 def fig_adstock(decay: pd.DataFrame) -> str:
     fig, ax = plt.subplots(figsize=(6.5, 3))
     for i, (ch, d) in enumerate(decay.groupby("channel", sort=False)):
@@ -200,7 +226,9 @@ table.tbl th{background:var(--card)}
 def build_report(path, *, cfg, summ, dec, pred, metrics, curves, decay, diagnostics,
                  opt: dict | None, holdout_metrics: pd.DataFrame | None,
                  scenarios: pd.DataFrame | None = None, baseline: pd.DataFrame | None = None,
-                 changepoint_dates: list | None = None) -> None:
+                 changepoint_dates: list | None = None,
+                 weekly_curve: pd.DataFrame | None = None,
+                 weekly_points: pd.DataFrame | None = None) -> None:
     channels = list(summ["channel"])
     total_sales = dec["actual"].sum()
     ad_share = summ["contribution_mean"].sum() / total_sales
@@ -265,6 +293,15 @@ def build_report(path, *, cfg, summ, dec, pred, metrics, curves, decay, diagnost
         base_html = (f'<h2>ベースラインの内訳</h2><p class="muted">{trend_desc}。下段は季節性とコントロール変数の効果。</p>'
                      + fig_baseline(baseline, changepoint_dates or []))
 
+    weekly_html = ""
+    if weekly_curve is not None and weekly_points is not None:
+        weekly_html = ('<h2>週次の飽和曲線と実績</h2><p class="muted">横軸 = その週に効いている出稿額'
+                       '（adstock 適用後。過去の出稿の持ち越しを含み、単位は出稿額と同じ）、縦軸 = その週の貢献。'
+                       '線は推定した飽和曲線（帯は 94% 区間）、〇は実績の各週。〇が曲線の平らな部分に多いほど、'
+                       '出稿が飽和気味であることを示します（〇は曲線から計算した値なので曲線上に並びます。'
+                       '各週の値は weekly_saturation_points.csv）。</p>'
+                       + fig_weekly_saturation(weekly_curve, weekly_points, channels))
+
     scen_html = ""
     if scenarios is not None and len(scenarios):
         scfmt = {"current_spend": "{:,.0f}", "scenario_spend": "{:,.0f}", "spend_change": "{:+,.0f}",
@@ -321,8 +358,10 @@ roi_prior_median / roi_prior_sd は推定に使った ROI の事前分布（auto
 {fig_roi(summ)}
 <div class="scroll">{_table(summ, sfmt)}</div>
 
-<h2>応答曲線（saturation）</h2>
-<p class="muted">全期間の支出を 0〜{cfg.response_curve['max_multiplier']}倍にした場合の総貢献。点線は実績支出。帯は 94% 区間。</p>
+{weekly_html}
+
+<h2>期間合計の応答曲線（予算検討用）</h2>
+<p class="muted">横軸は期間合計の出稿額。全期間の出稿を一律に 0〜{cfg.response_curve['max_multiplier']}倍にした場合の総貢献。点線は実績の出稿額。帯は 94% 区間。</p>
 {fig_response(curves, summ)}
 
 <h2>adstock（持越効果）</h2>

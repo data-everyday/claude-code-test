@@ -160,7 +160,8 @@ ROI 事前の中央値 = ad_share × KPI 合計 ÷ 広告費合計      （既�
 | `decomposition.csv` | 週次の貢献度分解（baseline + 各チャネル） |
 | `predictions.csv` / `fit_metrics.csv` | 予測値と精度指標 |
 | `holdout_metrics.csv` | ホールドアウト検証結果 |
-| `response_curves.csv` | 応答曲線（支出 0〜2 倍） |
+| `response_curves.csv` | 期間合計の応答曲線（支出 0〜2 倍） |
+| `weekly_saturation_curve.csv` / `weekly_saturation_points.csv` | 週次の飽和曲線と実績各週の点（adstock 後の出稿額 → 週の貢献） |
 | `adstock_decay.csv` | ラグ別 adstock 重み |
 | `baseline_components.csv` | ベースラインの内訳（切片+トレンド・季節性・コントロール） |
 | `budget_optimization.csv` | 最適予算配分 |
