@@ -107,6 +107,7 @@ response_curve:
 
 output:
   dir: mmm_output
+  interval: 0.95                  # 信用区間の幅（0.95 = 95%。0.9 / 0.8 なども可）
   bigquery:
     enabled: false                # true で結果テーブルを BQ に書き戻し
     dataset_id: "mmm_results"

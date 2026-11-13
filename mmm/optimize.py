@@ -11,7 +11,7 @@ import numpy as np
 import pandas as pd
 from scipy.optimize import minimize
 
-from .analysis import contribution_given_multipliers, subsample
+from .analysis import contribution_given_multipliers, interval_bounds, subsample
 from .data import ModelData
 from .model import BayesianMMM, FitResult
 
@@ -89,8 +89,8 @@ def optimize_budget(md: ModelData, mmm: BayesianMMM, fit: FitResult, opt_cfg: di
         "current_total_contribution": float(base_draws.sum(axis=1).mean()),
         "optimal_total_contribution": float(opt_draws.sum(axis=1).mean()),
         "uplift_mean": float(uplift.mean()),
-        "uplift_lo": float(np.quantile(uplift, 0.03)),
-        "uplift_hi": float(np.quantile(uplift, 0.97)),
+        "uplift_lo": float(np.quantile(uplift, interval_bounds()[0])),
+        "uplift_hi": float(np.quantile(uplift, interval_bounds()[1])),
         "prob_uplift_positive": float((uplift > 0).mean()),
         "success": bool(res.success),
     }

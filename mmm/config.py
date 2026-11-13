@@ -61,6 +61,7 @@ class Config:
     response_curve: dict[str, Any]
     output_dir: Path
     output_bq: dict[str, Any] = field(default_factory=dict)
+    interval: float = 0.95  # 信用区間の幅
     scenarios: list[dict[str, Any]] = field(default_factory=list)
 
 
@@ -147,6 +148,15 @@ def parse_default_roi(spec) -> dict[str, Any] | None:
     if not 0 < share < 1:
         raise ValueError("model.default_roi_prior.ad_share は 0〜1 の間（例: 0.2 = 20%）")
     return {"mode": "auto", "ad_share": share, "sd": sd}
+
+
+def _interval(v) -> float:
+    v = float(v)
+    if v > 1:  # 95 のような % 表記も受け付ける
+        v = v / 100
+    if not 0.5 <= v < 1:
+        raise ValueError("output.interval は 0.5〜0.99（または 50〜99）で指定してください")
+    return v
 
 
 def parse_events(spec) -> tuple[list[dict[str, Any]], str]:
@@ -335,5 +345,6 @@ def load_config(path: str | Path, overrides: dict[str, Any] | None = None) -> Co
         response_curve=response_curve,
         output_dir=out_dir,
         output_bq=_get(raw, "output.bigquery", {}) or {},
+        interval=_interval(_get(raw, "output.interval", 0.95)),
         scenarios=_get(raw, "scenarios", []) or [],
     )

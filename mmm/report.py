@@ -17,6 +17,8 @@ import matplotlib.ticker  # noqa: E402,F401
 import numpy as np  # noqa: E402
 import pandas as pd  # noqa: E402
 
+from .analysis import interval_label  # noqa: E402
+
 PALETTE = ["#2a6fdb", "#e8743b", "#19a979", "#945ecf", "#13a4b4", "#d64f8f", "#bf9b30",
            "#6f7c91"]
 
@@ -40,7 +42,7 @@ def _table(df: pd.DataFrame, fmt: dict | None = None) -> str:
 def fig_fit(pred: pd.DataFrame) -> str:
     fig, ax = plt.subplots(figsize=(11, 3.6))
     ax.fill_between(pred["date"], pred["pred_lo"], pred["pred_hi"], color="#2a6fdb", alpha=0.18,
-                    label="94% predictive interval")
+                    label=f"{interval_label()} predictive interval")
     ax.plot(pred["date"], pred["actual"], color="#222", lw=1.3, label="actual")
     ax.plot(pred["date"], pred["predicted"], color="#2a6fdb", lw=1.3, label="predicted")
     test = pred[pred["split"] == "test"]
@@ -120,7 +122,7 @@ def fig_roi(summ: pd.DataFrame) -> str:
     ax.axvline(1.0, color="#999", ls="--", lw=0.8)
     ax.set_yticks(y, summ["channel"])
     ax.invert_yaxis()
-    ax.set_xlabel("ROI (contribution / spend), 94% interval")
+    ax.set_xlabel(f"ROI (contribution / spend), {interval_label()} interval")
     ax.spines[["top", "right"]].set_visible(False)
     return _img(fig)
 
@@ -242,7 +244,13 @@ def build_report(path, *, cfg, summ, dec, pred, metrics, curves, decay, diagnost
                  scenarios: pd.DataFrame | None = None, baseline: pd.DataFrame | None = None,
                  changepoint_dates: list | None = None,
                  weekly_curve: pd.DataFrame | None = None,
-                 weekly_points: pd.DataFrame | None = None) -> None:
+                 weekly_points: pd.DataFrame | None = None,
+                 prior_share: dict | None = None) -> None:
+    IL = interval_label()
+    prior_html = ""
+    if prior_share:
+        prior_html = (f'<span>事前の想定 {prior_share["median"]:.0%}'
+                      f'（{IL}範囲 {prior_share["lo"]:.0%}〜{prior_share["hi"]:.0%}）</span>')
     channels = list(summ["channel"])
     total_sales = dec["actual"].sum()
     ad_share = summ["contribution_mean"].sum() / total_sales
@@ -262,7 +270,7 @@ def build_report(path, *, cfg, summ, dec, pred, metrics, curves, decay, diagnost
         s = diagnostics["summary"].reset_index().rename(columns={"index": "param"})
         diag_html += f'<details><summary>パラメータ要約</summary><div class="scroll">{s.to_html(index=False, border=0, classes="tbl")}</div></details>'
 
-    mfmt = {"mape": "{:.1%}", "rmse": "{:,.0f}", "r2": "{:.3f}", "coverage_94": "{:.0%}"}
+    mfmt = {"mape": "{:.1%}", "rmse": "{:,.0f}", "r2": "{:.3f}", "coverage": "{:.0%}"}
     holdout_html = ""
     if holdout_metrics is not None and len(holdout_metrics):
         holdout_html = (f"<h3>ホールドアウト検証（末尾 {cfg.holdout_weeks} 週を除外して学習）</h3>"
@@ -291,7 +299,7 @@ def build_report(path, *, cfg, summ, dec, pred, metrics, curves, decay, diagnost
 <div class="kpis">
 <div class="kpi"><span>現状の広告貢献</span><b>{opt['current_total_contribution']:,.0f}</b></div>
 <div class="kpi"><span>最適配分の広告貢献</span><b>{opt['optimal_total_contribution']:,.0f}</b></div>
-<div class="kpi"><span>期待改善（94%区間）</span><b>{opt['uplift_mean']:+,.0f}</b><span>[{opt['uplift_lo']:+,.0f}, {opt['uplift_hi']:+,.0f}]</span></div>
+<div class="kpi"><span>期待改善（{IL}区間）</span><b>{opt['uplift_mean']:+,.0f}</b><span>[{opt['uplift_lo']:+,.0f}, {opt['uplift_hi']:+,.0f}]</span></div>
 <div class="kpi"><span>改善がプラスの確率</span><b>{opt['prob_uplift_positive']:.0%}</b></div>
 </div>
 {'' if opt['success'] else '<div class="warn">⚠ 最適化ソルバーが収束しませんでした。結果は参考値です</div>'}
@@ -311,7 +319,7 @@ def build_report(path, *, cfg, summ, dec, pred, metrics, curves, decay, diagnost
     if weekly_curve is not None and weekly_points is not None:
         weekly_html = ('<h2>週次の飽和曲線と実績</h2><p class="muted">横軸 = その週に効いている出稿額'
                        '（adstock 適用後。過去の出稿の持ち越しを含み、単位は出稿額と同じ）、縦軸 = その週の貢献。'
-                       '線は推定した飽和曲線（帯は 94% 区間）、〇は実績の各週。〇が曲線の平らな部分に多いほど、'
+                       f'線は推定した飽和曲線（帯は {IL} 区間）、〇は実績の各週。〇が曲線の平らな部分に多いほど、'
                        '出稿が飽和気味であることを示します（〇は曲線から計算した値なので曲線上に並びます。'
                        '各週の値は weekly_saturation_points.csv）。</p>'
                        + fig_weekly_saturation(weekly_curve, weekly_points, channels))
@@ -328,7 +336,7 @@ def build_report(path, *, cfg, summ, dec, pred, metrics, curves, decay, diagnost
             blocks.append(
                 f'<h3>{html.escape(str(name))}</h3><p class="muted">直近 {int(tot["period_weeks"])} 週。'
                 f'支出 {tot["spend_change"]:+,.0f} → 貢献 {tot["delta_contribution"]:+,.0f}'
-                f'（94%区間 [{tot["delta_lo"]:+,.0f}, {tot["delta_hi"]:+,.0f}]、'
+                f'（{IL}区間 [{tot["delta_lo"]:+,.0f}, {tot["delta_hi"]:+,.0f}]、'
                 f'プラスの確率 {tot["prob_delta_positive"]:.0%}）</p>'
                 f'<div class="scroll">{_table(d.drop(columns=["scenario", "period_weeks"]), scfmt)}</div>')
         scen_html = ('<h2>シナリオシミュレーション</h2><p class="muted">実績の週次パターンを維持して支出を変えた場合の、'
@@ -340,11 +348,13 @@ def build_report(path, *, cfg, summ, dec, pred, metrics, curves, decay, diagnost
 <title>MMM Report</title><style>{CSS}</style></head><body><main>
 <h1>Marketing Mix Model レポート</h1>
 <p class="muted">生成日時 {datetime.now():%Y-%m-%d %H:%M} ／ 期間 {dec['date'].min():%Y-%m-%d} 〜 {dec['date'].max():%Y-%m-%d}（{len(dec)} 週）／
-目的変数 {html.escape(cfg.target_column)} ／ チャネル {len(channels)}</p>
+目的変数 {html.escape(cfg.target_column)} ／ チャネル {len(channels)}<br>
+区間はベイズ信用区間（{IL}）：「真の値がこの範囲にある確率が {IL}」という意味です。
+広告貢献シェアの「事前の想定」は ROI 事前分布から計算した値で、推定結果がこれに近く区間も広い場合はデータより事前で決まっている可能性があります。</p>
 <div class="kpis">
 <div class="kpi"><span>総売上</span><b>{total_sales:,.0f}</b></div>
 <div class="kpi"><span>総広告費</span><b>{total_spend:,.0f}</b></div>
-<div class="kpi"><span>広告貢献シェア</span><b>{ad_share:.1%}</b></div>
+<div class="kpi"><span>広告貢献シェア（推定）</span><b>{ad_share:.1%}</b>{prior_html}</div>
 <div class="kpi"><span>広告全体 ROI</span><b>{blended_roi:.2f}</b></div>
 </div>
 
@@ -363,7 +373,7 @@ def build_report(path, *, cfg, summ, dec, pred, metrics, curves, decay, diagnost
 <h2>出稿割合と売上貢献割合</h2>
 <p class="muted">上：広告費全体に占める各チャネルの出稿金額の割合（合計 100%）。
 下：全売上（KPI）に占める各チャネルの貢献の割合。全チャネルの合計が広告貢献シェア（{ad_share:.1%}）になります。
-上より下の比率が相対的に大きいチャネルほど、費用対効果が高いことを示します（貢献の 94% 区間は下の表の contribution_share_lo / hi）。</p>
+上より下の比率が相対的に大きいチャネルほど、費用対効果が高いことを示します（貢献の {IL} 区間は下の表の contribution_share_lo / hi）。</p>
 {fig_share(summ)}
 
 <h2>チャネル別 ROI</h2>
@@ -375,7 +385,7 @@ roi_prior_median / roi_prior_sd は推定に使った ROI の事前分布（auto
 {weekly_html}
 
 <h2>期間合計の応答曲線（予算検討用）</h2>
-<p class="muted">横軸は期間合計の出稿額。全期間の出稿を一律に 0〜{cfg.response_curve['max_multiplier']}倍にした場合の総貢献。点線は実績の出稿額。帯は 94% 区間。</p>
+<p class="muted">横軸は期間合計の出稿額。全期間の出稿を一律に 0〜{cfg.response_curve['max_multiplier']}倍にした場合の総貢献。点線は実績の出稿額。帯は {IL} 区間。</p>
 {fig_response(curves, summ)}
 
 <h2>adstock（持越効果）</h2>

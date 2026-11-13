@@ -8,11 +8,45 @@ from .data import ModelData
 from .model import BayesianMMM, FitResult, adstock_weights_np, saturated_np
 from .transforms import apply_adstock_np, hill_np, lag_stack
 
-HDI_LO, HDI_HI = 0.03, 0.97  # 94% 区間
+# 区間（ベイズ信用区間）の幅。output.interval で変更（既定 95%）。分位点で中央の区間をとる
+INTERVAL = 0.95
+
+
+def set_interval(level: float) -> None:
+    global INTERVAL
+    if not 0.5 <= level < 1:
+        raise ValueError("output.interval は 0.5〜0.99 で指定してください（例: 0.95）")
+    INTERVAL = float(level)
+
+
+def interval_bounds() -> tuple[float, float]:
+    tail = (1 - INTERVAL) / 2
+    return tail, 1 - tail
+
+
+def interval_label() -> str:
+    return f"{INTERVAL * 100:g}%"
 
 
 def _q(a: np.ndarray, axis=0):
-    return np.quantile(a, HDI_LO, axis=axis), np.quantile(a, HDI_HI, axis=axis)
+    lo, hi = interval_bounds()
+    return np.quantile(a, lo, axis=axis), np.quantile(a, hi, axis=axis)
+
+
+def prior_media_share(md: ModelData, mmm: BayesianMMM, n: int = 20000, seed: int = 0) -> dict | None:
+    """ROI の事前分布が想定している「広告貢献シェア（全チャネル合計の貢献 ÷ KPI 合計）」の分布。
+    広告貢献 = Σ ROI_c × 出稿額_c なので、ROI の事前から直接計算できる。HalfNormal 係数のチャネルがあれば None。"""
+    priors = mmm.roi_priors()
+    if any(p is None for p in priors):
+        return None
+    rng = np.random.default_rng(seed)
+    spend = md.spend.sum(axis=0)
+    roi = np.column_stack([np.exp(np.log(p["median"]) + p["sd"] * rng.standard_normal(n))
+                           for p in priors])
+    share = (roi * spend).sum(axis=1) / md.y.sum()
+    lo, hi = _q(share)
+    return {"median": float(np.median(share)), "lo": float(lo), "hi": float(hi),
+            "roi_medians": [p["median"] for p in priors]}
 
 
 def subsample(posterior: dict, n: int, seed: int = 0) -> dict:
@@ -54,7 +88,7 @@ def baseline_components(md: ModelData, fit: FitResult) -> pd.DataFrame:
 
 
 def channel_summary(md: ModelData, fit: FitResult, mmm: BayesianMMM) -> pd.DataFrame:
-    """チャネル別の 総貢献・貢献シェア・ROI（94% 区間）・限界 ROI。"""
+    """チャネル別の 総貢献・貢献シェア・ROI（信用区間）・限界 ROI。"""
     p = fit.posterior
     contrib = p["channel_contribution"] * md.y_scale  # (D, T, C)
     total_contrib = contrib.sum(axis=1)  # (D, C)
@@ -143,7 +177,7 @@ def weekly_saturation(md: ModelData, mmm: BayesianMMM, fit: FitResult, n_draws: 
 
     横軸 = その週に効いている出稿額（adstock 適用後。重みの合計が 1 なので単位は元の出稿額と同じ）
     縦軸 = その週の貢献（KPI）
-    曲線: 0〜実績最大×max_ratio の出稿額に対する 貢献 = β·Hill(x/scale)·y_scale（事後平均と 94% 区間）
+    曲線: 0〜実績最大×max_ratio の出稿額に対する 貢献 = β·Hill(x/scale)·y_scale（事後平均と信用区間）
     点:   実績の各週の (adstock 後出稿額, 貢献) の事後平均
     """
     p = subsample(fit.posterior, n_draws)
@@ -211,7 +245,7 @@ def fit_metrics(md: ModelData, fit: FitResult, seed: int = 0) -> pd.DataFrame:
             "mape": float(np.mean(np.abs((y[nz] - yh[nz]) / y[nz]))) if nz.any() else np.nan,
             "rmse": float(np.sqrt(np.mean((y - yh) ** 2))),
             "r2": float(1 - ss_res / ss_tot) if ss_tot > 0 else np.nan,
-            "coverage_94": float(np.mean((y >= lo[mask]) & (y <= hi[mask]))),
+            "coverage": float(np.mean((y >= lo[mask]) & (y <= hi[mask]))),
         })
     return pd.DataFrame(rows)
 

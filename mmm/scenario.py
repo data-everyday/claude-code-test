@@ -17,7 +17,7 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
-from .analysis import HDI_HI, HDI_LO, contribution_given_multipliers, subsample
+from .analysis import contribution_given_multipliers, interval_bounds, subsample
 from .data import ModelData
 from .model import BayesianMMM
 
@@ -45,7 +45,7 @@ def _multipliers(sc: dict, names: list[str], cur_spend: np.ndarray) -> np.ndarra
 
 def run_scenarios(md: ModelData, mmm: BayesianMMM, posterior: dict, scenarios: list[dict],
                   default_weeks: int, n_draws: int = 500) -> pd.DataFrame:
-    """シナリオごと・チャネルごとの支出と貢献（現状比の差分・94% 区間）。
+    """シナリオごと・チャネルごとの支出と貢献（現状比の差分・信用区間）。
     channel='TOTAL' 行に合計と「改善がプラスの確率」を出す。"""
     if not scenarios:
         return pd.DataFrame()
@@ -75,7 +75,8 @@ def run_scenarios(md: ModelData, mmm: BayesianMMM, posterior: dict, scenarios: l
                 "spend_change": spend1 - spend0,
                 "current_contribution": b.mean(), "scenario_contribution": n.mean(),
                 "delta_contribution": d.mean(),
-                "delta_lo": np.quantile(d, HDI_LO), "delta_hi": np.quantile(d, HDI_HI),
+                "delta_lo": np.quantile(d, interval_bounds()[0]),
+                "delta_hi": np.quantile(d, interval_bounds()[1]),
                 "incremental_roi": (d.mean() / (spend1 - spend0)
                                     if abs(spend1 - spend0) > 1e-9 else np.nan),
                 "prob_delta_positive": float((d > 0).mean()),

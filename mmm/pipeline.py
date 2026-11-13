@@ -19,6 +19,7 @@ log = logging.getLogger(__name__)
 def run(cfg: Config) -> dict:
     out = cfg.output_dir
     out.mkdir(parents=True, exist_ok=True)
+    analysis.set_interval(cfg.interval)
 
     df = load_dataframe(cfg)
     md = build_model_data(df, cfg)
@@ -57,6 +58,7 @@ def run(cfg: Config) -> dict:
     decay = analysis.adstock_decay(mmm, fit)
     wk_curve, wk_points = analysis.weekly_saturation(md, mmm, fit)
     base = analysis.baseline_components(md, fit)
+    prior_share = analysis.prior_media_share(md, mmm)
     cp_dates = list(md.dates.iloc[md.changepoint_index]) if len(md.changepoint_index) else []
 
     opt = None
@@ -92,7 +94,7 @@ def run(cfg: Config) -> dict:
                  curves=curves, decay=decay, diagnostics=fit.diagnostics, opt=opt,
                  holdout_metrics=holdout_metrics, scenarios=scen, baseline=base,
                  changepoint_dates=cp_dates, weekly_curve=wk_curve,
-                 weekly_points=wk_points)
+                 weekly_points=wk_points, prior_share=prior_share)
     log.info("レポート出力: %s", report_path)
 
     if cfg.output_bq.get("enabled"):

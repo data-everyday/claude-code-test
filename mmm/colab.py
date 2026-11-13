@@ -95,7 +95,7 @@ def build_config(*, csv_path: str, date_column: str, target_column: str, channel
                  roi_prior_median: float = 1.0, roi_prior_sd: float = 1.0,
                  opt_period_weeks: int = 52, budget_lower: float = 0.7,
                  budget_upper: float = 1.3, total_budget: float = 0,
-                 output_dir: str = "mmm_output", **old_kwargs) -> dict:
+                 output_dir: str = "mmm_output", interval: float = 0.95, **old_kwargs) -> dict:
     """フォーム値 → mmm_config.yaml と同じ構造の dict。CSV の列も検証する。"""
     if old_kwargs:
         raise ValueError(
@@ -137,7 +137,7 @@ def build_config(*, csv_path: str, date_column: str, target_column: str, channel
         "optimization": {"enabled": True, "period_weeks": int(opt_period_weeks),
                          "total_budget": float(total_budget) if total_budget else None,
                          "lower_bound": float(budget_lower), "upper_bound": float(budget_upper)},
-        "output": {"dir": output_dir},
+        "output": {"dir": output_dir, "interval": float(interval)},
     }
 
 
@@ -145,3 +145,27 @@ def save_yaml(obj, path: str) -> str:
     with open(path, "w", encoding="utf-8") as f:
         yaml.safe_dump(obj, f, allow_unicode=True, sort_keys=False)
     return path
+
+
+def describe_prior(config_path: str) -> str:
+    """設定から「事前に想定している ROI と広告貢献シェア」を計算して説明文を返す（推定は行わない）。"""
+    from .analysis import interval_label, prior_media_share, set_interval
+    from .config import load_config
+    from .data import build_model_data, load_dataframe
+    from .model import BayesianMMM
+
+    cfg = load_config(config_path)
+    set_interval(cfg.interval)
+    md = build_model_data(load_dataframe(cfg), cfg)
+    mmm = BayesianMMM(cfg, md)
+    ps = prior_media_share(md, mmm)
+    if ps is None:
+        return "（ROI 事前分布なしの設定のため、事前の広告貢献シェアは計算できません）"
+    kpi, spend = md.y.sum(), md.spend.sum()
+    meds = sorted(set(round(m, 6) for m in ps["roi_medians"]))
+    roi_txt = f"{meds[0]:.3g}" if len(meds) == 1 else "チャネル別に " + ", ".join(f"{m:.3g}" for m in meds)
+    return (f"KPI 合計 {kpi:,.0f} ／ 広告費合計 {spend:,.0f}\n"
+            f"→ ROI 事前の中央値 {roi_txt}（KPI 増分 ÷ 広告費）\n"
+            f"→ 事前に想定している広告貢献シェア: 中央値 {ps['median']:.0%}"
+            f"（{interval_label()}範囲 {ps['lo']:.0%}〜{ps['hi']:.0%}）\n"
+            "データが十分に強いチャネルは推定でこの想定から離れ、弱いチャネルはこの想定に近い値になります。")

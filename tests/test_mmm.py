@@ -325,3 +325,27 @@ def test_event_flags_and_season_period(tmp_path):
 
     with pytest.raises(ValueError, match="組み込みイベント"):
         load_config(save_yaml({**d, "events": {"builtin": ["xmas"]}}, str(tmp_path / "e.yaml")))
+
+
+def test_interval_and_prior_media_share(tmp_path):
+    from mmm import analysis
+    from mmm.colab import describe_prior
+
+    path = _write_cfg(tmp_path, "model: {adstock_max_lag: 6, default_roi_prior: {ad_share: 0.2, sd: 0.3}}")
+    raw = (tmp_path / "c.yaml").read_text().replace("output: {dir: out}",
+                                                    "output: {dir: out, interval: 90}")
+    path.write_text(raw.replace("roi_prior: {median: 1.5, sd: 0.5}", "roi_prior: null"))
+    cfg = load_config(path)
+    assert cfg.interval == 0.9
+    analysis.set_interval(cfg.interval)
+    assert analysis.interval_bounds() == pytest.approx((0.05, 0.95))
+    assert analysis.interval_label() == "90%"
+    df = pd.read_csv(tmp_path / "d.csv")
+    md = build_model_data(validate_dataframe(df, cfg), cfg)
+    ps = analysis.prior_media_share(md, BayesianMMM(cfg, md))
+    assert ps["median"] == pytest.approx(0.2, rel=0.1)  # 全チャネル共通の中央値 → シェア中央値 ≈ 20%
+    assert ps["lo"] < 0.2 < ps["hi"]
+    assert "広告貢献シェア" in describe_prior(str(path))
+    analysis.set_interval(0.95)
+    with pytest.raises(ValueError):
+        load_config(path, {"output.interval": 1.5})

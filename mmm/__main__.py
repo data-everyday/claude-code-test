@@ -95,6 +95,9 @@ def _simulate(cfg, args) -> int:
     if not post_path.exists():
         print(f"{post_path} がありません。先に `python -m mmm run` で推定してください")
         return 1
+    from .analysis import set_interval
+
+    set_interval(cfg.interval)
     md = build_model_data(load_dataframe(cfg), cfg)
     posterior = load_posterior(post_path)
     if posterior["mu"].shape[1] != len(md.y) or posterior["beta"].shape[1] != len(md.channel_names):
