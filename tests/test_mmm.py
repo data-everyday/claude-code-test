@@ -194,9 +194,11 @@ def test_speed_preset_and_overrides(tmp_path):
 def test_colab_build_config(tmp_path):
     from mmm.colab import build_config, parse_channels, parse_controls, parse_multipliers, save_yaml
 
-    assert parse_channels("tv：tv_spend：delayed、 search") == [
-        {"name": "tv", "column": "tv_spend", "adstock": "delayed"},
-        {"name": "search", "column": "search", "adstock": "geometric"}]
+    assert parse_channels("tv：tv_spend：delayed：S、 search") == [
+        {"name": "tv", "column": "tv_spend", "adstock": "delayed", "saturation": "s"},
+        {"name": "search", "column": "search", "adstock": "geometric", "saturation": "auto"}]
+    with pytest.raises(ValueError, match="曲線の形"):
+        parse_channels("tv:tv_spend:geometric:x")
     assert parse_controls("") == []
     assert parse_multipliers("tv:1.5, social:0.8") == {"tv": 1.5, "social": 0.8}
     with pytest.raises(ValueError, match="adstock"):
@@ -242,3 +244,24 @@ def test_changepoint_fit_runs(tmp_path):
     fit = BayesianMMM(cfg, md).fit()
     assert fit.posterior["changepoint_delta"].shape[1] == 3
     assert fit.posterior["trend"].shape[1] == len(md.y)
+
+
+def test_saturation_shape_options(tmp_path):
+    path = _write_cfg(tmp_path)
+    raw = (tmp_path / "c.yaml").read_text()
+    raw = raw.replace("{name: search, column: search_spend, max_lag: 4}",
+                      "{name: search, column: search_spend, max_lag: 4, saturation: c}")
+    raw = raw.replace("{name: social, column: social_spend}",
+                      "{name: social, column: social_spend, saturation: s}")
+    path.write_text(raw)
+    cfg = load_config(path)
+    assert [c.saturation for c in cfg.channels] == ["auto", "c", "s"]
+    df = pd.read_csv(tmp_path / "d.csv")
+    md = build_model_data(validate_dataframe(df, cfg), cfg)
+    fit = BayesianMMM(cfg, md).fit()
+    S = fit.posterior["S"]
+    assert np.all(S[:, 1] == 1.0)  # C 字固定
+    assert np.all(S[:, 2] > 1.0)  # S 字限定
+    path.write_text(raw.replace("saturation: s", "saturation: z"))
+    with pytest.raises(ValueError, match="saturation"):
+        load_config(path)

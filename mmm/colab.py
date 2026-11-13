@@ -14,8 +14,8 @@ def _split(text: str) -> list[list[str]]:
 
 
 def parse_channels(text: str) -> list[dict]:
-    """'tv:tv_spend:delayed, search:search_spend' -> channels 設定。
-    列名・adstock は省略可（列名=名前, adstock=geometric）。"""
+    """'tv:tv_spend:delayed:s, search:search_spend' -> channels 設定。
+    列名・adstock・曲線の形は省略可（列名=名前, adstock=geometric, 形=auto）。"""
     out = []
     for parts in _split(text):
         name = parts[0]
@@ -23,7 +23,10 @@ def parse_channels(text: str) -> list[dict]:
         adstock = parts[2] if len(parts) > 2 and parts[2] else "geometric"
         if adstock not in ("geometric", "delayed"):
             raise ValueError(f"チャネル {name}: adstock は geometric か delayed です（入力: {adstock}）")
-        out.append({"name": name, "column": column, "adstock": adstock})
+        saturation = parts[3].lower() if len(parts) > 3 and parts[3] else "auto"
+        if saturation not in ("auto", "c", "s"):
+            raise ValueError(f"チャネル {name}: 曲線の形は auto / c / s です（入力: {saturation}）")
+        out.append({"name": name, "column": column, "adstock": adstock, "saturation": saturation})
     if not out:
         raise ValueError("チャネルを 1 つ以上入力してください")
     return out

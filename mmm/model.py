@@ -12,7 +12,7 @@ y_scaled[t] = intercept + trend + seasonality + controls
     季節性等と連動するチャネルでも推定が安定する。
   - model.default_roi_prior: null かつ roi_prior 未指定: beta_c ~ HalfNormal(beta_prior_sigma)
 * adstock: geometric（alpha）または delayed（alpha, theta=ピークラグ）
-* saturation: Hill（K=半飽和点, S=形状）
+* saturation: Hill（K=半飽和点, S=形状。チャネルごとに auto / c(C字固定) / s(S字限定)）
 """
 from __future__ import annotations
 
@@ -157,7 +157,18 @@ class BayesianMMM:
 
             # --- saturation (Hill) ---
             K = pm.Beta("K", alpha=3.0, beta=3.0, dims="channel")
-            S = pm.Gamma("S", alpha=5.0, beta=3.0, dims="channel")
+            # 形 S: auto = 推定（S≤1 で C 字, S>1 で S 字）/ c = C 字に固定(S=1) / s = S 字に限定(S>1)
+            sat_types = np.array([c.saturation for c in cfg.channels])
+            S = pt.ones(C)
+            a_idx = np.flatnonzero(sat_types == "auto")
+            s_idx = np.flatnonzero(sat_types == "s")
+            if len(a_idx):
+                S = pt.set_subtensor(S[a_idx], pm.Gamma("S_auto", alpha=5.0, beta=3.0,
+                                                        shape=len(a_idx)))
+            if len(s_idx):
+                S = pt.set_subtensor(S[s_idx], 1.0 + pm.Gamma("S_excess", alpha=2.0, beta=2.0,
+                                                              shape=len(s_idx)))
+            S = pm.Deterministic("S", S, dims="channel")
             sat = hill_pt(adstocked, K, S)  # (T, C)
 
             # --- 広告係数（正制約） ---

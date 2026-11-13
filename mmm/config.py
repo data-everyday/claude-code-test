@@ -8,6 +8,7 @@ from typing import Any
 import yaml
 
 ADSTOCK_TYPES = {"geometric", "delayed"}
+SATURATION_TYPES = {"auto", "c", "s"}  # auto=形も推定 / c=C字固定(S=1) / s=S字に限定(S>1)
 TREND_TYPES = {"none", "linear", "changepoint"}
 MAX_LAG_LIMIT = 20  # adstock の最大ラグの上限（週）
 SIGNS = {"positive", "negative", "free"}
@@ -18,6 +19,7 @@ class ChannelConfig:
     name: str
     column: str
     adstock: str = "geometric"
+    saturation: str = "auto"
     max_lag: int | None = None
     # 任意: ROI 事前分布（指定時は LogNormal(log(mean), sd) を ROI に置く）
     roi_prior_mean: float | None = None  # LogNormal の中央値（設定キーは median）
@@ -186,6 +188,7 @@ def load_config(path: str | Path, overrides: dict[str, Any] | None = None) -> Co
             name=ch["name"],
             column=ch.get("column", ch["name"]),
             adstock=ch.get("adstock", "geometric"),
+            saturation=str(ch.get("saturation", "auto")).lower(),
             max_lag=ch.get("max_lag"),
             # LogNormal の中心は「中央値」。旧キー mean も受け付ける
             roi_prior_mean=_get(ch, "roi_prior.median", _get(ch, "roi_prior.mean")),
@@ -195,6 +198,8 @@ def load_config(path: str | Path, overrides: dict[str, Any] | None = None) -> Co
             raise ValueError(f"{c.name}: max_lag は 1〜{MAX_LAG_LIMIT} で指定してください")
         if c.adstock not in ADSTOCK_TYPES:
             raise ValueError(f"{c.name}: adstock は {ADSTOCK_TYPES} のいずれか")
+        if c.saturation not in SATURATION_TYPES:
+            raise ValueError(f"{c.name}: saturation は auto / c / s のいずれか（入力: {c.saturation}）")
         if (c.roi_prior_mean is None) != (c.roi_prior_sd is None):
             raise ValueError(f"{c.name}: roi_prior は median と sd を両方指定してください")
         if c.roi_prior_mean is not None and c.roi_prior_mean <= 0:

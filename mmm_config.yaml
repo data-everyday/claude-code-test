@@ -20,6 +20,7 @@ channels:
   - name: tv
     column: tv_spend
     adstock: delayed              # geometric / delayed（ピークが遅れて来る）
+    # saturation: auto            # 飽和曲線の形: auto（推定・既定）/ c（C字に固定）/ s（S字に限定）
     # max_lag: 13                 # チャネル個別の最大ラグ 1〜20（省略時 model.adstock_max_lag）
     # roi_prior:                  # 任意: リフト試験等の知見で上書き → ROI ~ LogNormal(log(median), sd)
     #   median: 1.5
