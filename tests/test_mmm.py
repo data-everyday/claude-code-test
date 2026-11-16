@@ -349,3 +349,28 @@ def test_interval_and_prior_media_share(tmp_path):
     analysis.set_interval(0.95)
     with pytest.raises(ValueError):
         load_config(path, {"output.interval": 1.5})
+
+
+def test_hill_marginal_and_optimal_line(tmp_path):
+    from mmm.analysis import _hill_marginal, optimal_weekly_spend
+
+    u = np.linspace(0.05, 3, 50)[None, :]
+    K, S = np.array([[0.5]]), np.array([[1.8]])
+    num = (hill_np(u + 1e-6, K[0], S[0]) - hill_np(u - 1e-6, K[0], S[0])) / 2e-6
+    np.testing.assert_allclose(_hill_marginal(u, K, S), num, rtol=1e-4)
+
+    path = _write_cfg(tmp_path, "economics: {value_per_kpi: 1, gross_margin: 50}")
+    cfg = load_config(path)
+    assert cfg.economics == {"value_per_kpi": 1.0, "gross_margin": 0.5}  # 50 → 0.5
+    df = pd.read_csv(tmp_path / "d.csv")
+    md = build_model_data(validate_dataframe(df, cfg), cfg)
+    mmm = BayesianMMM(cfg, md)
+    fit = mmm.fit()
+    ol = optimal_weekly_spend(md, mmm, fit, cfg.economics)
+    assert list(ol["channel"]) == ["tv", "search", "social"]
+    assert (ol["optimal_weekly_spend"] >= 0).all()
+    assert ol["judgement"].notna().all()
+    # 粗利が大きいほど最適出稿額は大きくなる（単調性）
+    ol_hi = optimal_weekly_spend(md, mmm, fit, {"value_per_kpi": 10.0, "gross_margin": 1.0})
+    assert (ol_hi["optimal_weekly_spend"] >= ol["optimal_weekly_spend"]).all()
+    assert load_config(path, {"economics": None}).economics is None

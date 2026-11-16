@@ -95,7 +95,8 @@ def build_config(*, csv_path: str, date_column: str, target_column: str, channel
                  roi_prior_median: float = 1.0, roi_prior_sd: float = 1.0,
                  opt_period_weeks: int = 52, budget_lower: float = 0.7,
                  budget_upper: float = 1.3, total_budget: float = 0,
-                 output_dir: str = "mmm_output", interval: float = 0.95, **old_kwargs) -> dict:
+                 output_dir: str = "mmm_output", interval: float = 0.95,
+                 value_per_kpi: float = 0, gross_margin: float = 1.0, **old_kwargs) -> dict:
     """フォーム値 → mmm_config.yaml と同じ構造の dict。CSV の列も検証する。"""
     if old_kwargs:
         raise ValueError(
@@ -138,6 +139,8 @@ def build_config(*, csv_path: str, date_column: str, target_column: str, channel
                          "total_budget": float(total_budget) if total_budget else None,
                          "lower_bound": float(budget_lower), "upper_bound": float(budget_upper)},
         "output": {"dir": output_dir, "interval": float(interval)},
+        "economics": ({"value_per_kpi": float(value_per_kpi), "gross_margin": float(gross_margin)}
+                      if value_per_kpi and value_per_kpi > 0 else None),
     }
 
 

@@ -171,7 +171,8 @@ def response_curves(md: ModelData, mmm: BayesianMMM, fit: FitResult,
 
 
 def weekly_saturation(md: ModelData, mmm: BayesianMMM, fit: FitResult, n_draws: int = 200,
-                      n_points: int = 60, max_ratio: float = 1.3
+                      n_points: int = 80, max_ratio: float = 1.3,
+                      optimal: pd.DataFrame | None = None
                       ) -> tuple[pd.DataFrame, pd.DataFrame]:
     """週次の飽和曲線と実績週の点。
 
@@ -188,7 +189,12 @@ def weekly_saturation(md: ModelData, mmm: BayesianMMM, fit: FitResult, n_draws: 
 
     curve_rows, point_rows = [], []
     for i, ch in enumerate(md.channel_names):
-        xmax = float(ad_money[:, :, i].mean(axis=0).max()) * max_ratio
+        actual_max = float(ad_money[:, :, i].mean(axis=0).max())
+        xmax = actual_max * max_ratio
+        if optimal is not None:  # 最適ラインが見えるよう横軸を広げる（実績最大の 5 倍まで）
+            o = optimal.loc[optimal["channel"] == ch, "optimal_weekly_spend"]
+            if len(o) and np.isfinite(o.iloc[0]):
+                xmax = min(max(xmax, float(o.iloc[0]) * 1.15), actual_max * 5)
         grid = np.linspace(0, xmax, n_points)
         xs = grid / md.spend_scale[i]
         D = len(p["beta"])
@@ -206,6 +212,70 @@ def weekly_saturation(md: ModelData, mmm: BayesianMMM, fit: FitResult, n_draws: 
                                "effective_spend": ad_money[:, t, i].mean(),
                                "contribution": contrib[:, t, i].mean()})
     return pd.DataFrame(curve_rows), pd.DataFrame(point_rows)
+
+
+def _hill_marginal(u: np.ndarray, K: np.ndarray, S: np.ndarray) -> np.ndarray:
+    """Hill 関数の傾き d/du [u^S / (u^S + K^S)]。"""
+    us, ks = np.power(u, S), np.power(K, S)
+    return S * ks * np.power(u, S - 1) / (us + ks) ** 2
+
+
+def optimal_weekly_spend(md: ModelData, mmm: BayesianMMM, fit: FitResult, econ: dict,
+                         n_draws: int = 200, n_grid: int = 800, max_ratio: float = 5.0
+                         ) -> pd.DataFrame:
+    """利益ベースで「追加の 1 円が 1 円以上の粗利を生む」最大の週次出稿額（限界利益 ROI = 1 の点）。
+
+    利益 = KPI × value_per_kpi（平均単価）× gross_margin（粗利率）。
+    毎週同じ額を出稿し続ける定常状態を仮定（adstock の重みは合計 1 なので、
+    定常状態では adstock 後の出稿額 = 週次出稿額となり、週次飽和曲線の傾き = 限界 ROI）。
+    事後サンプルごとに最適点を求め、中央値と区間を返す。
+    """
+    v = float(econ["value_per_kpi"]) * float(econ.get("gross_margin", 1.0))  # KPI 1 単位の粗利
+    p = subsample(fit.posterior, n_draws)
+    w = adstock_weights_np(mmm.spec, p["alpha"], p["theta"])
+    ad_money = apply_adstock_np(mmm.xlag, w).mean(axis=0) * md.spend_scale  # (T, C) 事後平均
+    lo_q, hi_q = interval_bounds()
+    rows = []
+    for i, ch in enumerate(md.channel_names):
+        scale = md.spend_scale[i]
+        beta, K, S = p["beta"][:, i:i + 1], p["K"][:, i:i + 1], p["S"][:, i:i + 1]
+        actual_max = float(ad_money[:, i].max())
+        grid = np.linspace(actual_max * max_ratio / n_grid, actual_max * max_ratio, n_grid)
+
+        def mprofit(x):  # 限界利益 ROI（追加 1 円あたりの粗利）。(D, len(x))
+            return beta * md.y_scale * _hill_marginal(np.asarray(x)[None, :] / scale, K, S) / scale * v
+
+        mp = mprofit(grid)
+        ok = mp >= 1.0
+        last = np.where(ok.any(axis=1), n_grid - 1 - np.argmax(ok[:, ::-1], axis=1), -1)
+        opt = np.where(last < 0, 0.0, grid[np.clip(last, 0, None)])
+        beyond = ok[:, -1]  # 範囲の端でもまだ限界 ROI > 1
+        opt = np.where(beyond, np.inf, opt)
+
+        cur = float(md.spend[:, i].mean())  # 現在の平均週次出稿額
+        mcur = mprofit(np.array([max(cur, 1e-9)]))[:, 0]
+        prob_up = float((mcur > 1).mean())
+        avg_roi = (p["channel_contribution"][:, :, i].sum(axis=1) * md.y_scale
+                   / md.spend[:, i].sum() * v)
+        if prob_up >= 0.8:
+            judge = "増やすと利益が増える可能性が高い"
+        elif prob_up <= 0.2:
+            judge = "減らすと利益が増える可能性が高い"
+        else:
+            judge = "ほぼ最適〜判断保留（不確実性が大きい）"
+        rows.append({
+            "channel": ch,
+            "current_weekly_spend": cur,
+            "optimal_weekly_spend": float(np.quantile(opt, 0.5, method="inverted_cdf")),
+            "optimal_lo": float(np.quantile(opt, lo_q, method="inverted_cdf")),
+            "optimal_hi": float(np.quantile(opt, hi_q, method="inverted_cdf")),
+            "prob_beyond_range": float(beyond.mean()),
+            "avg_profit_roi": float(avg_roi.mean()),
+            "marginal_profit_roi_now": float(np.median(mcur)),
+            "prob_marginal_above_1": prob_up,
+            "judgement": judge,
+        })
+    return pd.DataFrame(rows)
 
 
 def adstock_decay(mmm: BayesianMMM, fit: FitResult) -> pd.DataFrame:

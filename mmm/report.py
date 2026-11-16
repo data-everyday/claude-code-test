@@ -152,11 +152,13 @@ def fig_response(curves: pd.DataFrame, summ: pd.DataFrame) -> str:
     return _img(fig)
 
 
-def fig_weekly_saturation(curve: pd.DataFrame, points: pd.DataFrame, chans: list[str]) -> str:
+def fig_weekly_saturation(curve: pd.DataFrame, points: pd.DataFrame, chans: list[str],
+                          optimal: pd.DataFrame | None = None, econ: dict | None = None) -> str:
     n = len(chans)
     cols = min(n, 3)
     rows = int(np.ceil(n / cols))
-    fig, axes = plt.subplots(rows, cols, figsize=(4.2 * cols, 3.3 * rows), squeeze=False)
+    fig, axes = plt.subplots(rows, cols, figsize=(4.2 * cols, 3.4 * rows), squeeze=False)
+    v = econ["value_per_kpi"] * econ["gross_margin"] if econ else None
     for i, ch in enumerate(chans):
         ax = axes[i // cols][i % cols]
         color = PALETTE[i % len(PALETTE)]
@@ -167,6 +169,23 @@ def fig_weekly_saturation(curve: pd.DataFrame, points: pd.DataFrame, chans: list
         ax.plot(c["effective_spend"], c["contribution_mean"], color=color, lw=1.8)
         ax.scatter(pt_["effective_spend"], pt_["contribution"], s=16, facecolors="none",
                    edgecolors="#1d2330", linewidths=0.7, alpha=0.7, zorder=3)
+        if optimal is not None and v:
+            o = optimal[optimal["channel"] == ch].iloc[0]
+            xmax = float(c["effective_spend"].max())
+            ymax = float(c["contribution_hi"].max())
+            # 損益分岐線: 貢献 × 単価 × 粗利率 = 出稿額（この線より上なら平均では黒字）
+            xs = np.array([0, xmax])
+            ax.plot(xs, xs / v, color="#999", ls="--", lw=0.9,
+                    label="break-even (profit = spend)" if i == 0 else None)
+            ax.axvline(o["current_weekly_spend"], color="#999", ls=":", lw=1,
+                       label="current avg weekly spend" if i == 0 else None)
+            lo, hi = o["optimal_lo"], min(o["optimal_hi"], xmax)
+            if np.isfinite(lo) and lo < xmax:
+                ax.axvspan(lo, hi, color=NAVY, alpha=0.08, lw=0)
+            if np.isfinite(o["optimal_weekly_spend"]) and o["optimal_weekly_spend"] <= xmax:
+                ax.axvline(o["optimal_weekly_spend"], color=NAVY, lw=1.6,
+                           label="optimal (marginal profit ROI = 1)" if i == 0 else None)
+            ax.set_ylim(0, ymax * 1.05)
         ax.set_title(ch, fontsize=10)
         ax.set_xlabel("weekly effective spend (after adstock)", fontsize=8)
         ax.set_ylabel("weekly contribution", fontsize=8)
@@ -174,7 +193,11 @@ def fig_weekly_saturation(curve: pd.DataFrame, points: pd.DataFrame, chans: list
         ax.spines[["top", "right"]].set_visible(False)
     for j in range(n, rows * cols):
         axes[j // cols][j % cols].axis("off")
-    fig.tight_layout()
+    if optimal is not None and v:
+        fig.legend(loc="lower center", ncol=3, fontsize=8, frameon=False, bbox_to_anchor=(0.5, -0.02))
+        fig.tight_layout(rect=(0, 0.05, 1, 1))
+    else:
+        fig.tight_layout()
     return _img(fig)
 
 
@@ -245,7 +268,8 @@ def build_report(path, *, cfg, summ, dec, pred, metrics, curves, decay, diagnost
                  changepoint_dates: list | None = None,
                  weekly_curve: pd.DataFrame | None = None,
                  weekly_points: pd.DataFrame | None = None,
-                 prior_share: dict | None = None) -> None:
+                 prior_share: dict | None = None,
+                 optimal_line: pd.DataFrame | None = None) -> None:
     IL = interval_label()
     prior_html = ""
     if prior_share:
@@ -322,7 +346,34 @@ def build_report(path, *, cfg, summ, dec, pred, metrics, curves, decay, diagnost
                        f'線は推定した飽和曲線（帯は {IL} 区間）、〇は実績の各週。〇が曲線の平らな部分に多いほど、'
                        '出稿が飽和気味であることを示します（〇は曲線から計算した値なので曲線上に並びます。'
                        '各週の値は weekly_saturation_points.csv）。</p>'
-                       + fig_weekly_saturation(weekly_curve, weekly_points, channels))
+                       + fig_weekly_saturation(weekly_curve, weekly_points, channels,
+                                               optimal_line, cfg.economics))
+        if optimal_line is not None:
+            e = cfg.economics
+            ol = optimal_line.copy()
+
+            def _opt_txt(r):
+                if not np.isfinite(r["optimal_weekly_spend"]):
+                    return "実績の 5 倍以上（データ範囲外）"
+                if r["optimal_weekly_spend"] == 0:
+                    return "0（出稿しない方が利益）"
+                hi = "5 倍以上" if not np.isfinite(r["optimal_hi"]) else f"{r['optimal_hi']:,.0f}"
+                return f"{r['optimal_weekly_spend']:,.0f}（{r['optimal_lo']:,.0f}〜{hi}）"
+            ol["最適な週次出稿額（区間）"] = ol.apply(_opt_txt, axis=1)
+            ol = ol.rename(columns={"channel": "チャネル", "current_weekly_spend": "現在の平均週次出稿額",
+                                    "avg_profit_roi": "平均利益ROI", "marginal_profit_roi_now": "現在の限界利益ROI",
+                                    "prob_marginal_above_1": "限界ROI>1 の確率", "judgement": "判定"})
+            ol = ol[["チャネル", "現在の平均週次出稿額", "最適な週次出稿額（区間）", "平均利益ROI",
+                     "現在の限界利益ROI", "限界ROI>1 の確率", "判定"]]
+            weekly_html += (
+                f'<h3>利益から見た最適な出稿ライン</h3><p class="muted">KPI 1 単位の金額 {e["value_per_kpi"]:,.4g} × '
+                f'粗利率 {e["gross_margin"]:.0%} = 粗利 {e["value_per_kpi"] * e["gross_margin"]:,.4g} として計算。'
+                '<b>平均利益ROI</b> = これまでの出稿全体で、1 円あたりいくらの粗利を生んだか。'
+                '<b>限界利益ROI</b> = 出稿を 1 円増やしたとき増える粗利。最適な出稿額は「限界利益ROI = 1」の点'
+                '（それ以上増やすと、追加分は赤字）。グラフの縦線（濃紺）が最適点、薄い帯がその区間、'
+                '点線が現在の平均週次出稿額、破線が損益分岐線（貢献の粗利 = 出稿額）。'
+                '毎週同じ額を出稿し続ける前提の目安で、予算に上限がある場合は「予算最適化」の配分を優先してください。</p>'
+                + f'<div class="scroll">{_table(ol, {"現在の平均週次出稿額": "{:,.0f}", "平均利益ROI": "{:.2f}", "現在の限界利益ROI": "{:.2f}", "限界ROI>1 の確率": "{:.0%}"})}</div>')
 
     scen_html = ""
     if scenarios is not None and len(scenarios):

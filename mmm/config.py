@@ -62,6 +62,7 @@ class Config:
     output_dir: Path
     output_bq: dict[str, Any] = field(default_factory=dict)
     interval: float = 0.95  # 信用区間の幅
+    economics: dict[str, Any] | None = None  # {value_per_kpi, gross_margin}
     scenarios: list[dict[str, Any]] = field(default_factory=list)
 
 
@@ -148,6 +149,21 @@ def parse_default_roi(spec) -> dict[str, Any] | None:
     if not 0 < share < 1:
         raise ValueError("model.default_roi_prior.ad_share は 0〜1 の間（例: 0.2 = 20%）")
     return {"mode": "auto", "ad_share": share, "sd": sd}
+
+
+def _economics(spec) -> dict[str, Any] | None:
+    """economics: {value_per_kpi: 平均単価（KPI 1 単位の金額）, gross_margin: 粗利率}。未設定なら None。"""
+    if not spec or not spec.get("value_per_kpi"):
+        return None
+    v = float(spec["value_per_kpi"])
+    m = float(spec.get("gross_margin", 1.0) or 1.0)
+    if v <= 0:
+        raise ValueError("economics.value_per_kpi は正の値（KPI が売上金額なら 1）")
+    if m > 1:  # 30 のような % 表記も受け付ける
+        m = m / 100
+    if not 0 < m <= 1:
+        raise ValueError("economics.gross_margin は 0〜1（例: 0.3 = 30%）")
+    return {"value_per_kpi": v, "gross_margin": m}
 
 
 def _interval(v) -> float:
@@ -346,5 +362,6 @@ def load_config(path: str | Path, overrides: dict[str, Any] | None = None) -> Co
         output_dir=out_dir,
         output_bq=_get(raw, "output.bigquery", {}) or {},
         interval=_interval(_get(raw, "output.interval", 0.95)),
+        economics=_economics(_get(raw, "economics")),
         scenarios=_get(raw, "scenarios", []) or [],
     )

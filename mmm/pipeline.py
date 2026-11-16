@@ -56,7 +56,9 @@ def run(cfg: Config) -> dict:
     curves = analysis.response_curves(md, mmm, fit, float(rc["max_multiplier"]),
                                       int(rc["n_points"]), int(rc["n_draws"]))
     decay = analysis.adstock_decay(mmm, fit)
-    wk_curve, wk_points = analysis.weekly_saturation(md, mmm, fit)
+    opt_line = (analysis.optimal_weekly_spend(md, mmm, fit, cfg.economics)
+                if cfg.economics else None)
+    wk_curve, wk_points = analysis.weekly_saturation(md, mmm, fit, optimal=opt_line)
     base = analysis.baseline_components(md, fit)
     prior_share = analysis.prior_media_share(md, mmm)
     cp_dates = list(md.dates.iloc[md.changepoint_index]) if len(md.changepoint_index) else []
@@ -78,6 +80,8 @@ def run(cfg: Config) -> dict:
     curves.to_csv(out / "response_curves.csv", index=False)
     wk_curve.to_csv(out / "weekly_saturation_curve.csv", index=False)
     wk_points.to_csv(out / "weekly_saturation_points.csv", index=False)
+    if opt_line is not None:
+        opt_line.to_csv(out / "optimal_weekly_spend.csv", index=False)
     decay.to_csv(out / "adstock_decay.csv", index=False)
     base.to_csv(out / "baseline_components.csv", index=False)
     if opt:
@@ -94,7 +98,8 @@ def run(cfg: Config) -> dict:
                  curves=curves, decay=decay, diagnostics=fit.diagnostics, opt=opt,
                  holdout_metrics=holdout_metrics, scenarios=scen, baseline=base,
                  changepoint_dates=cp_dates, weekly_curve=wk_curve,
-                 weekly_points=wk_points, prior_share=prior_share)
+                 weekly_points=wk_points, prior_share=prior_share,
+                 optimal_line=opt_line)
     log.info("レポート出力: %s", report_path)
 
     if cfg.output_bq.get("enabled"):
