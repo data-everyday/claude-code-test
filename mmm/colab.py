@@ -87,7 +87,7 @@ def parse_custom_events(text: str) -> list[dict]:
 
 
 def build_config(*, csv_path: str, date_column: str, target_column: str, channels: str,
-                 controls: str = "", speed: str = "fast", holdout_weeks: int = 0,
+                 controls: str = "", speed: str = "fast", holdout_weeks: int = 6,
                  seasonality: str | bool | float = "1年（52週）",
                  events_builtin: list[str] | None = None, events_custom: str = "", trend: str | bool = "linear", max_lag: int = 13,
                  changepoint_interval: int = 26, changepoint_scale: float = 0.05,

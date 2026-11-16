@@ -296,7 +296,21 @@ def build_report(path, *, cfg, summ, dec, pred, metrics, curves, decay, diagnost
 
     mfmt = {"mape": "{:.1%}", "rmse": "{:,.0f}", "r2": "{:.3f}", "coverage": "{:.0%}"}
     holdout_html = ""
+    holdout_summary = ('<p class="muted">ホールドアウト検証は行っていません'
+                       '（validation.holdout_weeks / Colab の「ホールドアウト週数」で週数を指定すると、テスト期間の精度が出ます）。</p>')
     if holdout_metrics is not None and len(holdout_metrics):
+        t = holdout_metrics[holdout_metrics["split"] == "test"]
+        if len(t):
+            t = t.iloc[0]
+            r2_note = "（テスト期間が短いと R² は不安定になり、マイナスになることもあります）"
+            holdout_summary = (
+                f'<div class="kpis"><div class="kpi"><span>テスト期間</span><b>末尾 {int(t["n_weeks"])} 週</b></div>'
+                f'<div class="kpi"><span>テスト MAPE</span><b>{t["mape"]:.1%}</b></div>'
+                f'<div class="kpi"><span>テスト RMSE</span><b>{t["rmse"]:,.0f}</b></div>'
+                f'<div class="kpi"><span>テスト R²</span><b>{t["r2"]:.3f}</b></div>'
+                f'<div class="kpi"><span>テスト {IL}区間の的中率</span><b>{t["coverage"]:.0%}</b></div></div>'
+                f'<p class="muted">学習に使っていない末尾 {int(t["n_weeks"])} 週を予測した精度{r2_note}。'
+                '下の「モデル適合」の表は全期間で再推定したモデルの学習データへの当てはまりです。</p>')
         holdout_html = (f"<h3>ホールドアウト検証（末尾 {cfg.holdout_weeks} 週を除外して学習）</h3>"
                         f'<div class="scroll">{_table(holdout_metrics, mfmt)}</div>'
                         f'{fig_fit(holdout_metrics.attrs["pred"])}')
@@ -410,6 +424,9 @@ def build_report(path, *, cfg, summ, dec, pred, metrics, curves, decay, diagnost
 </div>
 
 <h2>収束診断</h2>{diag_html}
+
+<h2>予測精度（テスト期間）</h2>
+{holdout_summary}
 
 <h2>モデル適合</h2>
 <div class="scroll">{_table(metrics, mfmt)}</div>

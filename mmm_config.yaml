@@ -67,9 +67,9 @@ model:
 #   gross_margin: 0.3             # 粗利率（0.3 = 30%）。売上ベースで見るなら 1.0
 
 # イベント期間のフラグ（任意）。その週が期間に 1 日でも重なれば 1 の列を自動で作り、コントロール変数に加える
-# events:
-#   week_anchor: start            # date 列が週の初日なら start、最終日なら end
-#   builtin: [year_end, golden_week, obon]   # 年末年始(12/29-1/3)・GW(4/29-5/5)・お盆(8/13-8/16)
+events:
+  week_anchor: start              # date 列が週の初日なら start、最終日なら end
+  builtin: [year_end, golden_week, obon]   # 年末年始(12/29-1/3)・GW(4/29-5/5)・お盆(8/13-8/16)。不要なら []
 #   custom:
 #     - name: summer_sale
 #       sign: positive            # free / positive / negative（既定 free）
@@ -87,7 +87,7 @@ sampler:
   nuts_sampler: auto              # auto = numpyro（高速）があれば使う / pymc / numpyro / nutpie
 
 validation:
-  holdout_weeks: 12               # 0 で検証なし
+  holdout_weeks: 6                # 末尾 N 週を学習から外して予測精度を検証（0 で検証なし。計算時間は約 2 倍）
   refit_full: true                # 検証後に全期間で再推定して分析に使う
 
 optimization:
