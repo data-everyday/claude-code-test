@@ -133,6 +133,10 @@ def test_end_to_end_positive_effects(tmp_path):
     assert res["report"].exists()
     pts = pd.read_csv(cfg.output_dir / "weekly_saturation_points.csv")
     assert len(pts) == 80 * 3 and (pts["contribution"] >= 0).all()
+    # 持ち越しを元の週に配分し直した値の合計 = 貢献の合計（チャネルごと）
+    g = pts.groupby("channel")[["contribution", "attributed_contribution"]].sum()
+    np.testing.assert_allclose(g["attributed_contribution"], g["contribution"], rtol=1e-6)
+    assert (pts.loc[pts["spend"] == 0, "steady_contribution"] == 0).all()
     assert (cfg.output_dir / "weekly_saturation_curve.csv").exists()
 
     sc = res["scenarios"]

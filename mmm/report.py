@@ -207,12 +207,13 @@ def fig_weekly_saturation(curve: pd.DataFrame, points: pd.DataFrame, chans: list
         ax.fill_between(c["effective_spend"], c["contribution_lo"], c["contribution_hi"],
                         color=color, alpha=0.18, lw=0)
         ax.plot(c["effective_spend"], c["contribution_mean"], color=color, lw=1.8)
-        ax.scatter(pt_[xcol], pt_["contribution"], s=16, facecolors="none",
+        ycol = "steady_contribution" if xcol == "spend" else "contribution"
+        ax.scatter(pt_[xcol], pt_[ycol], s=16, facecolors="none",
                    edgecolors="#1d2330", linewidths=0.7, alpha=0.7, zorder=3)
         if optimal is not None and v:
             o = optimal[optimal["channel"] == ch].iloc[0]
             xmax = float(c["effective_spend"].max())
-            ymax = max(float(c["contribution_hi"].max()), float(pt_["contribution"].max()))
+            ymax = max(float(c["contribution_hi"].max()), float(pt_[ycol].max()))
             # 損益分岐線: 貢献 × 単価 × 粗利率 = 出稿額（この線より上なら平均では黒字）
             xs = np.array([0, xmax])
             ax.plot(xs, xs / v, color="#999", ls="--", lw=0.9,
@@ -229,7 +230,8 @@ def fig_weekly_saturation(curve: pd.DataFrame, points: pd.DataFrame, chans: list
         ax.set_title(ch, fontsize=10)
         ax.set_xlabel("weekly effective spend (after adstock)" if xcol == "effective_spend"
                       else "weekly spend", fontsize=8)
-        ax.set_ylabel("weekly contribution", fontsize=8)
+        ax.set_ylabel("weekly contribution" if xcol == "effective_spend"
+                      else "contribution incl. carryover", fontsize=8)
         ax.tick_params(labelsize=7)
         ax.spines[["top", "right"]].set_visible(False)
     for j in range(n, rows * cols):
@@ -402,11 +404,12 @@ def build_report(path, *, cfg, summ, dec, pred, metrics, curves, decay, diagnost
     weekly_html = ""
     if weekly_curve is not None and weekly_points is not None:
         weekly_html = (f'<h2>週次の飽和曲線（横軸＝その週の出稿額）</h2><p class="muted">'
-                       f'線 = 毎週その金額を出稿し続けた場合の、1 週あたりの増分{K}（帯は {IL} 区間）。'
-                       '「週にいくら出すと、週あたりどれだけ効くか」を読むためのグラフで、出稿額の意思決定にはこちらが便利です。'
-                       f'〇 = 実績の各週（横軸＝その週の出稿額、縦軸＝その週の増分{K}）。'
-                       'その週の効果には前の週までの出稿の持ち越し（adstock）が含まれるため、〇は線の周りに散らばります'
-                       '（出稿 0 の週でも、直前に出稿していれば効果が残ります）。</p>'
+                       f'横軸 = 1 週間の出稿額、縦軸 = その週の出稿が生む増分{K}の合計（出稿した週だけでなく、'
+                       f'持ち越し（adstock）で翌週以降に出る効果も含む）。線は推定した飽和曲線（帯は {IL} 区間）、'
+                       '〇は実績の各週の出稿額を曲線に当てはめた位置で、すべて曲線上に並びます。'
+                       '「週にいくら出すと、その出稿でどれだけ効くか」を読むためのグラフで、出稿額の意思決定にはこちらが便利です。'
+                       '（毎週同程度の額を出稿している状況を前提とした値です。実際の出稿の並びで持ち越し分を配分し直した実績ベースの値は '
+                       'weekly_saturation_points.csv の attributed_contribution 列にあります）</p>'
                        + fig_weekly_saturation(weekly_curve, weekly_points, channels,
                                                optimal_line, cfg.economics, xcol="spend"))
         weekly_html += ('<h2>週次の飽和曲線と実績（横軸＝adstock 後の出稿額）</h2><p class="muted">横軸 = その週に効いている出稿額'

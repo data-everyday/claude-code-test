@@ -212,11 +212,31 @@ def weekly_saturation(md: ModelData, mmm: BayesianMMM, fit: FitResult, n_draws: 
             curve_rows.append({"channel": ch, "effective_spend": grid[k],
                                "contribution_mean": yc[:, k].mean(),
                                "contribution_lo": lo[k], "contribution_hi": hi[k]})
-        for t in range(len(md.y)):
+        # 週 t の出稿が持ち越しを含めて生む貢献の合計
+        #  steady_contribution: 毎週この額を出稿している定常状態での値 = 曲線上の値（グラフの〇）
+        #  attributed_contribution: 実績の出稿の並びで、各週の貢献を「その週に効いている出稿の内訳
+        #                           （w_l × 出稿_{t-l}）」の比率で元の週に配分し直した値（合計は貢献総額と一致）
+        x_s = md.spend[:, i] / md.spend_scale[i]
+        steady = (hill_np(np.broadcast_to(x_s[None, :, None], (len(p["beta"]), len(x_s), 1)),
+                          p["K"][:, i:i + 1], p["S"][:, i:i + 1])[:, :, 0]
+                  * p["beta"][:, i:i + 1] * md.y_scale).mean(axis=0)
+        wm = w[:, :, i].mean(axis=0)  # (L,)
+        eff_m = ad[:, :, i].mean(axis=0)  # (T,) スケール済み
+        con_m = contrib[:, :, i].mean(axis=0)
+        T = len(md.y)
+        attributed = np.zeros(T)
+        for t in range(T):
+            for lag in range(len(wm)):
+                u = t + lag
+                if u < T and eff_m[u] > 0:
+                    attributed[t] += wm[lag] * x_s[t] / eff_m[u] * con_m[u]
+        for t in range(T):
             point_rows.append({"channel": ch, "date": md.dates.iloc[t],
                                "spend": md.spend[t, i],
                                "effective_spend": ad_money[:, t, i].mean(),
-                               "contribution": contrib[:, t, i].mean()})
+                               "contribution": con_m[t],
+                               "steady_contribution": steady[t],
+                               "attributed_contribution": attributed[t]})
     return pd.DataFrame(curve_rows), pd.DataFrame(point_rows)
 
 
