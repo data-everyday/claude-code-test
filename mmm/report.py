@@ -186,7 +186,9 @@ def fig_response(curves: pd.DataFrame, summ: pd.DataFrame) -> str:
 
 
 def fig_weekly_saturation(curve: pd.DataFrame, points: pd.DataFrame, chans: list[str],
-                          optimal: pd.DataFrame | None = None, econ: dict | None = None) -> str:
+                          optimal: pd.DataFrame | None = None, econ: dict | None = None,
+                          xcol: str = "effective_spend") -> str:
+    """xcol = effective_spend（adstock 後）または spend（その週の出稿額）。"""
     n = len(chans)
     cols = min(n, 3)
     rows = int(np.ceil(n / cols))
@@ -195,17 +197,22 @@ def fig_weekly_saturation(curve: pd.DataFrame, points: pd.DataFrame, chans: list
     for i, ch in enumerate(chans):
         ax = axes[i // cols][i % cols]
         color = PALETTE[i % len(PALETTE)]
-        c = curve[curve["channel"] == ch]
         pt_ = points[points["channel"] == ch]
+        xlim = float(pt_[xcol].max()) * 1.3
+        if optimal is not None and v:
+            o_ = optimal[optimal["channel"] == ch].iloc[0]["optimal_weekly_spend"]
+            if np.isfinite(o_):
+                xlim = min(max(xlim, o_ * 1.15), float(pt_[xcol].max()) * 5)
+        c = curve[(curve["channel"] == ch) & (curve["effective_spend"] <= xlim)]
         ax.fill_between(c["effective_spend"], c["contribution_lo"], c["contribution_hi"],
                         color=color, alpha=0.18, lw=0)
         ax.plot(c["effective_spend"], c["contribution_mean"], color=color, lw=1.8)
-        ax.scatter(pt_["effective_spend"], pt_["contribution"], s=16, facecolors="none",
+        ax.scatter(pt_[xcol], pt_["contribution"], s=16, facecolors="none",
                    edgecolors="#1d2330", linewidths=0.7, alpha=0.7, zorder=3)
         if optimal is not None and v:
             o = optimal[optimal["channel"] == ch].iloc[0]
             xmax = float(c["effective_spend"].max())
-            ymax = float(c["contribution_hi"].max())
+            ymax = max(float(c["contribution_hi"].max()), float(pt_["contribution"].max()))
             # 損益分岐線: 貢献 × 単価 × 粗利率 = 出稿額（この線より上なら平均では黒字）
             xs = np.array([0, xmax])
             ax.plot(xs, xs / v, color="#999", ls="--", lw=0.9,
@@ -220,7 +227,8 @@ def fig_weekly_saturation(curve: pd.DataFrame, points: pd.DataFrame, chans: list
                            label="optimal (marginal profit ROI = 1)" if i == 0 else None)
             ax.set_ylim(0, ymax * 1.05)
         ax.set_title(ch, fontsize=10)
-        ax.set_xlabel("weekly effective spend (after adstock)", fontsize=8)
+        ax.set_xlabel("weekly effective spend (after adstock)" if xcol == "effective_spend"
+                      else "weekly spend", fontsize=8)
         ax.set_ylabel("weekly contribution", fontsize=8)
         ax.tick_params(labelsize=7)
         ax.spines[["top", "right"]].set_visible(False)
@@ -393,7 +401,15 @@ def build_report(path, *, cfg, summ, dec, pred, metrics, curves, decay, diagnost
 
     weekly_html = ""
     if weekly_curve is not None and weekly_points is not None:
-        weekly_html = ('<h2>週次の飽和曲線と実績</h2><p class="muted">横軸 = その週に効いている出稿額'
+        weekly_html = (f'<h2>週次の飽和曲線（横軸＝その週の出稿額）</h2><p class="muted">'
+                       f'線 = 毎週その金額を出稿し続けた場合の、1 週あたりの増分{K}（帯は {IL} 区間）。'
+                       '「週にいくら出すと、週あたりどれだけ効くか」を読むためのグラフで、出稿額の意思決定にはこちらが便利です。'
+                       f'〇 = 実績の各週（横軸＝その週の出稿額、縦軸＝その週の増分{K}）。'
+                       'その週の効果には前の週までの出稿の持ち越し（adstock）が含まれるため、〇は線の周りに散らばります'
+                       '（出稿 0 の週でも、直前に出稿していれば効果が残ります）。</p>'
+                       + fig_weekly_saturation(weekly_curve, weekly_points, channels,
+                                               optimal_line, cfg.economics, xcol="spend"))
+        weekly_html += ('<h2>週次の飽和曲線と実績（横軸＝adstock 後の出稿額）</h2><p class="muted">横軸 = その週に効いている出稿額'
                        '（adstock 適用後。過去の出稿の持ち越しを含み、単位は出稿額と同じ）、縦軸 = その週の貢献。'
                        f'線は推定した飽和曲線（帯は {IL} 区間）、〇は実績の各週。〇が曲線の平らな部分に多いほど、'
                        '出稿が飽和気味であることを示します（〇は曲線から計算した値なので曲線上に並びます。'

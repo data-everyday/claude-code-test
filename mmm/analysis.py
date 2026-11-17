@@ -173,10 +173,13 @@ def response_curves(md: ModelData, mmm: BayesianMMM, fit: FitResult,
 
 
 def weekly_saturation(md: ModelData, mmm: BayesianMMM, fit: FitResult, n_draws: int = 200,
-                      n_points: int = 80, max_ratio: float = 1.3,
+                      n_points: int = 160, max_ratio: float = 1.3,
                       optimal: pd.DataFrame | None = None
                       ) -> tuple[pd.DataFrame, pd.DataFrame]:
     """週次の飽和曲線と実績週の点。
+
+    曲線は「毎週 x を出稿し続けた定常状態での 1 週あたりの貢献」。adstock の重みは合計 1 なので、
+    定常状態では adstock 後の出稿額 = 週次出稿額となり、横軸がどちらでも同じ曲線になる。
 
     横軸 = その週に効いている出稿額（adstock 適用後。重みの合計が 1 なので単位は元の出稿額と同じ）
     縦軸 = その週の貢献（KPI）
@@ -191,7 +194,8 @@ def weekly_saturation(md: ModelData, mmm: BayesianMMM, fit: FitResult, n_draws: 
 
     curve_rows, point_rows = [], []
     for i, ch in enumerate(md.channel_names):
-        actual_max = float(ad_money[:, :, i].mean(axis=0).max())
+        # 横軸「adstock 後」「その週の出稿額」の両方のグラフで使えるよう、大きい方に合わせて曲線を計算
+        actual_max = max(float(ad_money[:, :, i].mean(axis=0).max()), float(md.spend[:, i].max()))
         xmax = actual_max * max_ratio
         if optimal is not None:  # 最適ラインが見えるよう横軸を広げる（実績最大の 5 倍まで）
             o = optimal.loc[optimal["channel"] == ch, "optimal_weekly_spend"]

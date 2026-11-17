@@ -163,13 +163,18 @@ def describe_prior(config_path: str) -> str:
     set_interval(cfg.interval)
     md = build_model_data(load_dataframe(cfg), cfg)
     mmm = BayesianMMM(cfg, md)
+    kpi, spend = md.y.sum(), md.spend.sum()
+    head = (f"目的変数（KPI）に使う列: 「{cfg.target_column}」（表示名 {cfg.kpi_name}）\n"
+            f"  {len(md.y)} 週 ／ 合計 {kpi:,.0f}{cfg.kpi_unit} ／ 週平均 {md.y.mean():,.0f} ／ "
+            f"最小 {md.y.min():,.0f} ／ 最大 {md.y.max():,.0f}\n"
+            "  ↑ 想定している KPI（例: 来場者数）の合計と一致しているか確認してください。"
+            "違う場合は「目的変数の列」の列名を見直してください。\n\n")
     ps = prior_media_share(md, mmm)
     if ps is None:
-        return "（ROI 事前分布なしの設定のため、事前の広告貢献シェアは計算できません）"
-    kpi, spend = md.y.sum(), md.spend.sum()
+        return head + "（ROI 事前分布なしの設定のため、事前の広告貢献シェアは計算できません）"
     meds = sorted(set(round(m, 6) for m in ps["roi_medians"]))
     roi_txt = f"{meds[0]:.3g}" if len(meds) == 1 else "チャネル別に " + ", ".join(f"{m:.3g}" for m in meds)
-    return (f"{cfg.kpi_name}の合計 {kpi:,.0f}{cfg.kpi_unit} ／ 広告費合計 {spend:,.0f}\n"
+    return head + (f"{cfg.kpi_name}の合計 {kpi:,.0f}{cfg.kpi_unit} ／ 広告費合計 {spend:,.0f}\n"
             f"→ ROI 事前の中央値 {roi_txt}（KPI 増分 ÷ 広告費）\n"
             f"→ 事前に想定している広告貢献シェア: 中央値 {ps['median']:.0%}"
             f"（{interval_label()}範囲 {ps['lo']:.0%}〜{ps['hi']:.0%}）\n"
