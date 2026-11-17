@@ -144,17 +144,43 @@ def fig_share(summ: pd.DataFrame) -> str:
     return _img(fig)
 
 
-def fig_roi(summ: pd.DataFrame) -> str:
-    fig, ax = plt.subplots(figsize=(6.5, 0.5 * len(summ) + 1.2))
+SPEND_MULTS = ((1, "1", "1"), (1e3, "1,000", "1K"), (1e4, "1万", "10K"), (1e5, "10万", "100K"),
+               (1e6, "100万", "1M"), (1e7, "1,000万", "10M"), (1e8, "1億", "100M"))
+
+
+def roi_scale(roi_values) -> tuple[float, str, str]:
+    """ROI（KPI ÷ 広告費）が小さいとき、「広告費 M あたり」に換算する M を選ぶ（最大値が 1 以上になる最小の M）。"""
+    mx = float(np.nanmax(np.asarray(roi_values, dtype=float))) if len(roi_values) else 1.0
+    for mult, jp, en in SPEND_MULTS:
+        if mx * mult >= 1:
+            return mult, jp, en
+    return SPEND_MULTS[-1]
+
+
+def fig_roi(summ: pd.DataFrame, econ: dict | None = None) -> str:
+    """採算あり: 利益 ROI（1 = 損益分岐）。採算なし: 「広告費 M あたりの増分 KPI」（KPI の単位に合わせて換算）。"""
+    if econ:
+        f = econ["value_per_kpi"] * econ["gross_margin"]
+        xlabel = f"profit ROI (gross profit / spend), {interval_label()} interval; 1 = break-even"
+        ref = 1.0
+    else:
+        f, _, en = roi_scale(summ["roi_hi"])
+        xlabel = (f"incremental KPI per {en} spend, {interval_label()} interval" if f != 1
+                  else f"ROI (incremental KPI / spend), {interval_label()} interval")
+        ref = None
+    m, lo, hi = summ["roi_mean"] * f, summ["roi_lo"] * f, summ["roi_hi"] * f
+    fig, ax = plt.subplots(figsize=(7, 0.5 * len(summ) + 1.3))
     y = np.arange(len(summ))
-    ax.barh(y, summ["roi_mean"], color=PALETTE[: len(summ)], alpha=0.85)
-    ax.errorbar(summ["roi_mean"], y, xerr=[summ["roi_mean"] - summ["roi_lo"],
-                                           summ["roi_hi"] - summ["roi_mean"]],
-                fmt="none", ecolor="#222", capsize=3, lw=1)
-    ax.axvline(1.0, color="#999", ls="--", lw=0.8)
+    ax.barh(y, m, color=PALETTE[: len(summ)], alpha=0.85)
+    ax.errorbar(m, y, xerr=[m - lo, hi - m], fmt="none", ecolor="#222", capsize=3, lw=1)
+    for i in range(len(summ)):
+        ax.text(hi.iloc[i], i, f" {smart_num(m.iloc[i])}", va="center", fontsize=8.5)
+    if ref is not None:
+        ax.axvline(ref, color="#999", ls="--", lw=0.8)
+    ax.set_xlim(0, max(float(hi.max()) * 1.15, (ref or 0) * 1.1))
     ax.set_yticks(y, summ["channel"])
     ax.invert_yaxis()
-    ax.set_xlabel(f"ROI (contribution / spend), {interval_label()} interval")
+    ax.set_xlabel(xlabel, fontsize=9)
     ax.spines[["top", "right"]].set_visible(False)
     return _img(fig)
 
@@ -298,8 +324,8 @@ h1{font-size:1.6rem;margin:0 0 4px}h2{font-size:1.15rem;margin:36px 0 10px;paddi
 .ok{background:#e9f7ef;color:#1e7a46;border-radius:8px;padding:10px 14px;margin:8px 0}
 img{max-width:100%;height:auto}
 .scroll{overflow-x:auto}
-table.tbl{border-collapse:collapse;font-size:.85rem;width:100%}
-table.tbl th,table.tbl td{padding:6px 8px;border-bottom:1px solid var(--line);text-align:right;white-space:nowrap}
+table.tbl{border-collapse:collapse;font-size:.85rem;width:max-content;min-width:100%;table-layout:auto}
+table.tbl th,table.tbl td{padding:6px 10px;border-bottom:1px solid var(--line);text-align:right;white-space:nowrap;overflow:visible}
 table.tbl th:first-child,table.tbl td:first-child{text-align:left}
 table.tbl th{background:var(--card)}
 """
@@ -370,6 +396,34 @@ def build_report(path, *, cfg, summ, dec, pred, metrics, curves, decay, diagnost
             "roi_prior_median": smart_num, "roi_prior_sd": "{:.2f}",
             "adstock_alpha": "{:.2f}", "adstock_theta": "{:.1f}", "hill_K": "{:.2f}",
             "hill_S": "{:.2f}"}
+
+    # チャネル別 ROI の見やすい表（件数系 KPI でも読めるよう「広告費 M あたり」に換算）
+    mult, mjp, _ = roi_scale(summ["roi_hi"])
+    per = f"広告費 {mjp} あたり" if mult != 1 else "広告費 1 あたり"
+    roi_view = pd.DataFrame({
+        "チャネル": summ["channel"],
+        "広告費": summ["spend"],
+        "出稿シェア": summ["spend_share"],
+        f"増分{cfg.kpi_name}": summ["contribution_mean"],
+        f"増分{cfg.kpi_name}（{IL}区間）": [f"{smart_num(a)}〜{smart_num(b)}"
+                                        for a, b in zip(summ["contribution_lo"], summ["contribution_hi"])],
+        "貢献シェア": summ["contribution_share"],
+        f"{per}の増分": summ["roi_mean"] * mult,
+        f"{per}（{IL}区間）": [f"{smart_num(a * mult)}〜{smart_num(b * mult)}"
+                            for a, b in zip(summ["roi_lo"], summ["roi_hi"])],
+        f"限界：{per}": summ["marginal_roi"] * mult,
+        f"CPA（増分 1{cfg.kpi_unit or '単位'}あたり広告費）": summ["cpa"],
+    })
+    roi_fmt = {"広告費": smart_num, "出稿シェア": "{:.1%}", f"増分{cfg.kpi_name}": smart_num,
+               "貢献シェア": "{:.1%}", f"{per}の増分": smart_num, f"限界：{per}": smart_num,
+               f"CPA（増分 1{cfg.kpi_unit or '単位'}あたり広告費）": smart_num}
+    if cfg.economics:
+        roi_note = ("グラフは利益 ROI（増分の粗利 ÷ 広告費）。破線の 1 が損益分岐で、1 を超えるチャネルは平均では黒字です。"
+                    f"表の「{per}の増分」は {K} の増分です。")
+    else:
+        roi_note = (f"グラフと表は「{per}、{K}が何{U or '単位'}増えたか」（ROI を見やすい単位に換算）。"
+                    "採算（KPI 1 単位の金額・粗利率）を入力すると、グラフが利益 ROI（1 = 損益分岐）になります。"
+                    "限界 = 今より少し増額したときの効率で、平均より低いほど飽和しています。")
 
     opt_html = ""
     if opt:
@@ -507,10 +561,12 @@ KPI（目的変数）{K}（列名 {html.escape(cfg.target_column)}）／ チャ�
 {fig_share(summ)}
 
 <h2>チャネル別 ROI</h2>
-<p class="muted">ROI = 期間内の増分{K} ÷ 広告費（広告費 1 あたり何{U or "単位"}増えたか）。cpa = 増分{K} 1{U or "単位"}あたりの広告費。限界ROI = 広告費を 1% 増やした場合の 追加{K} ÷ 追加広告費。広告係数は正に制約されています。
-roi_prior_median / roi_prior_sd は推定に使った ROI の事前分布（auto = 想定広告シェア × KPI 合計 ÷ 広告費合計）。事後の ROI が事前の中央値に近く区間も広いチャネルは、データより事前で決まっている可能性があります。</p>
-{fig_roi(summ)}
-<div class="scroll">{_table(summ, sfmt)}</div>
+<p class="muted">ROI = 期間内の増分{K} ÷ 広告費。CPA = 増分{K} 1{U or "単位"}あたりの広告費。限界 = 広告費を 1% 増やしたときの 追加{K} ÷ 追加広告費。広告効果は正に制約されています。
+詳細表の roi_prior_median / roi_prior_sd は推定に使った ROI の事前分布で、事後の ROI がこれに近く区間も広いチャネルは、データより事前で決まっている可能性があります。</p>
+{fig_roi(summ, cfg.economics)}
+<p class="muted">{roi_note}</p>
+<div class="scroll">{_table(roi_view, roi_fmt)}</div>
+<details><summary>すべての列（事前分布・adstock・飽和曲線のパラメータなど）</summary><div class="scroll">{_table(summ, sfmt)}</div></details>
 
 {weekly_html}
 
