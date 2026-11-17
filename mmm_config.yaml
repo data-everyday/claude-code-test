@@ -14,6 +14,8 @@ data:
     location: "asia-northeast1"
   date_column: date               # 週次・1 行/週
   target_column: sales
+  kpi_name: 売上                  # レポート表示用の KPI 名（例: 来場者数）。省略時は列名
+  kpi_unit: 円                    # KPI の単位（例: 人）
 
 # 広告チャネル（支出額の列）。広告効果は常に正に制約される。
 channels:

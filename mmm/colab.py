@@ -87,6 +87,7 @@ def parse_custom_events(text: str) -> list[dict]:
 
 
 def build_config(*, csv_path: str, date_column: str, target_column: str, channels: str,
+                 kpi_name: str = "", kpi_unit: str = "",
                  controls: str = "", speed: str = "fast", holdout_weeks: int = 6,
                  seasonality: str | bool | float = "1年（52週）",
                  events_builtin: list[str] | None = None, events_custom: str = "", trend: str | bool = "linear", max_lag: int = 13,
@@ -116,7 +117,8 @@ def build_config(*, csv_path: str, date_column: str, target_column: str, channel
 
     return {
         "data": {"source": "csv", "csv_path": str(Path(csv_path).resolve()),
-                 "date_column": date_column, "target_column": target_column},
+                 "date_column": date_column, "target_column": target_column,
+                 "kpi_name": kpi_name or target_column, "kpi_unit": kpi_unit},
         "channels": chs,
         "controls": ctls,
         "model": {
@@ -167,7 +169,7 @@ def describe_prior(config_path: str) -> str:
     kpi, spend = md.y.sum(), md.spend.sum()
     meds = sorted(set(round(m, 6) for m in ps["roi_medians"]))
     roi_txt = f"{meds[0]:.3g}" if len(meds) == 1 else "チャネル別に " + ", ".join(f"{m:.3g}" for m in meds)
-    return (f"KPI 合計 {kpi:,.0f} ／ 広告費合計 {spend:,.0f}\n"
+    return (f"{cfg.kpi_name}の合計 {kpi:,.0f}{cfg.kpi_unit} ／ 広告費合計 {spend:,.0f}\n"
             f"→ ROI 事前の中央値 {roi_txt}（KPI 増分 ÷ 広告費）\n"
             f"→ 事前に想定している広告貢献シェア: 中央値 {ps['median']:.0%}"
             f"（{interval_label()}範囲 {ps['lo']:.0%}〜{ps['hi']:.0%}）\n"

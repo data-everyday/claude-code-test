@@ -41,6 +41,8 @@ class Config:
     bq: dict[str, Any]
     date_column: str
     target_column: str
+    kpi_name: str  # レポート表示用の KPI 名（例: 来場者数）
+    kpi_unit: str  # KPI の単位（例: 人）
     channels: list[ChannelConfig]
     controls: list[ControlConfig]
     trend: str  # none / linear / changepoint
@@ -343,6 +345,8 @@ def load_config(path: str | Path, overrides: dict[str, Any] | None = None) -> Co
         bq=_get(raw, "data.bigquery", {}) or {},
         date_column=_get(raw, "data.date_column", "date"),
         target_column=_get(raw, "data.target_column", "sales"),
+        kpi_name=str(_get(raw, "data.kpi_name") or _get(raw, "data.target_column", "sales")),
+        kpi_unit=str(_get(raw, "data.kpi_unit") or ""),
         channels=channels,
         controls=controls,
         trend=trend,

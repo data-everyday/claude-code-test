@@ -113,6 +113,8 @@ def channel_summary(md: ModelData, fit: FitResult, mmm: BayesianMMM) -> pd.DataF
             "contribution_share_lo": clo[i] / total_sales,
             "contribution_share_hi": chi[i] / total_sales,
             "roi_mean": roi[:, i].mean(),
+            # 増分 KPI 1 単位あたりの広告費（CPA）。件数系 KPI ではこちらが直感的
+            "cpa": spend_total[i] / total_contrib[:, i].mean() if total_contrib[:, i].mean() > 0 else np.nan,
             "roi_lo": lo[i],
             "roi_hi": hi[i],
             "marginal_roi": mroi[i],

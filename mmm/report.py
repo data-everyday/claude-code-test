@@ -30,12 +30,44 @@ def _img(fig) -> str:
     return f'<img src="data:image/png;base64,{base64.b64encode(buf.getvalue()).decode()}"/>'
 
 
+def jp_num(v: float, unit: str = "") -> str:
+    """大きな数を「2.04万」「11.73億」のように読みやすく（有効数字 3〜4 桁）。"""
+    a = abs(v)
+    for d, suf in ((1e8, "億"), (1e4, "万")):
+        if a >= d:
+            x = v / d
+            txt = f"{x:,.2f}" if abs(x) < 100 else f"{x:,.0f}"
+            return txt + suf + unit
+    return f"{v:,.0f}" + unit
+
+
+def smart_num(v) -> str:
+    """桁に応じた表示（1000 以上はカンマ区切り整数、1〜1000 は小数 2 桁、1 未満は有効数字 3 桁）。"""
+    if v is None or (isinstance(v, float) and not np.isfinite(v)):
+        return ""
+    a = abs(v)
+    if a >= 1000:
+        return f"{v:,.0f}"
+    if a >= 1:
+        return f"{v:,.2f}"
+    return f"{v:.3g}"
+
+
+def per_spend(roi: float, unit: str) -> str:
+    """ROI（KPI ÷ 広告費）を「広告費 ○ あたり +△」の形に（△ が 1 以上になる最小の単位で）。"""
+    for mult, label in ((1, "1"), (1e3, "1,000"), (1e4, "1万"), (1e5, "10万"), (1e6, "100万"),
+                        (1e7, "1,000万"), (1e8, "1億")):
+        if roi * mult >= 1:
+            return f"広告費 {label} あたり +{smart_num(roi * mult)}{unit}"
+    return f"広告費 1億 あたり +{smart_num(roi * 1e8)}{unit}"
+
+
 def _table(df: pd.DataFrame, fmt: dict | None = None) -> str:
     fmt = fmt or {}
     d = df.copy()
     for col, f in fmt.items():
         if col in d:
-            d[col] = d[col].map(lambda v, f=f: "" if pd.isna(v) else f.format(v))
+            d[col] = d[col].map(lambda v, f=f: "" if pd.isna(v) else (f(v) if callable(f) else f.format(v)))
     return d.to_html(index=False, border=0, classes="tbl", escape=True)
 
 
@@ -89,7 +121,7 @@ LIGHT_BLUE = "#7cc4f0"  # 貢献（contribution）を表す色
 
 
 def fig_share(summ: pd.DataFrame) -> str:
-    """媒体ごとに 出稿割合（ネイビー, 合計 100%）と 売上貢献割合（水色, 合計 = 広告貢献シェア）を並べる。"""
+    """媒体ごとに 出稿割合（ネイビー, 合計 100%）と KPI 貢献割合（水色, 合計 = 広告貢献シェア）を並べる。"""
     n = len(summ)
     y = np.arange(n)
     h = 0.38
@@ -98,7 +130,7 @@ def fig_share(summ: pd.DataFrame) -> str:
     fig, ax = plt.subplots(figsize=(8, 0.75 * n + 1.4))
     ax.barh(y - h / 2, sp, height=h, color=NAVY, label="Share of spend (total 100%)")
     ax.barh(y + h / 2, ct, height=h, color=LIGHT_BLUE,
-            label=f"Contribution to total sales (total {ct.sum():.1f}%)")
+            label=f"Contribution to total KPI (total {ct.sum():.1f}%)")
     for i in range(n):
         ax.text(sp[i], y[i] - h / 2, f" {sp[i]:.1f}%", va="center", fontsize=8.5)
         ax.text(ct[i], y[i] + h / 2, f" {ct[i]:.1f}%", va="center", fontsize=8.5)
@@ -143,7 +175,8 @@ def fig_response(curves: pd.DataFrame, summ: pd.DataFrame) -> str:
         cur = summ.loc[summ["channel"] == ch].iloc[0]
         ax.axvline(cur["spend"], color="#222", ls=":", lw=1)
         ax.set_title(ch, fontsize=10)
-        ax.set_xlabel("total spend", fontsize=8)
+        ax.set_xlabel("total spend over the period", fontsize=8)
+        ax.set_ylabel("total incremental KPI", fontsize=8)
         ax.tick_params(labelsize=7)
         ax.spines[["top", "right"]].set_visible(False)
     for j in range(n, rows * cols):
@@ -250,7 +283,7 @@ h1{font-size:1.6rem;margin:0 0 4px}h2{font-size:1.15rem;margin:36px 0 10px;paddi
 .muted{color:var(--muted);font-size:.9rem}
 .kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:10px;margin-top:16px}
 .kpi{background:var(--card);border-radius:8px;padding:12px 14px}.kpi b{display:block;font-size:1.25rem}
-.kpi span{color:var(--muted);font-size:.8rem}
+.kpi span{display:block;color:var(--muted);font-size:.8rem}
 .warn{background:var(--warnbg);color:var(--warn);border-radius:8px;padding:10px 14px;margin:8px 0}
 .ok{background:#e9f7ef;color:#1e7a46;border-radius:8px;padding:10px 14px;margin:8px 0}
 img{max-width:100%;height:auto}
@@ -276,10 +309,15 @@ def build_report(path, *, cfg, summ, dec, pred, metrics, curves, decay, diagnost
         prior_html = (f'<span>事前の想定 {prior_share["median"]:.0%}'
                       f'（{IL}範囲 {prior_share["lo"]:.0%}〜{prior_share["hi"]:.0%}）</span>')
     channels = list(summ["channel"])
-    total_sales = dec["actual"].sum()
-    ad_share = summ["contribution_mean"].sum() / total_sales
+    K = html.escape(cfg.kpi_name)  # KPI 名（例: 来場者数）
+    U = html.escape(cfg.kpi_unit)  # 単位（例: 人）
+    total_kpi = dec["actual"].sum()
+    total_contrib = summ["contribution_mean"].sum()
+    ad_share = total_contrib / total_kpi
     total_spend = summ["spend"].sum()
-    blended_roi = summ["contribution_mean"].sum() / total_spend
+    blended_roi = total_contrib / total_spend
+    blended_cpa = total_spend / total_contrib if total_contrib > 0 else float("nan")
+    weeks = len(dec)
 
     diag_html = ""
     if diagnostics["warnings"]:
@@ -317,9 +355,9 @@ def build_report(path, *, cfg, summ, dec, pred, metrics, curves, decay, diagnost
 
     sfmt = {"spend": "{:,.0f}", "contribution_mean": "{:,.0f}", "contribution_lo": "{:,.0f}",
             "contribution_hi": "{:,.0f}", "contribution_share": "{:.1%}", "spend_share": "{:.1%}",
-            "contribution_share_lo": "{:.1%}", "contribution_share_hi": "{:.1%}", "roi_mean": "{:.2f}",
-            "roi_lo": "{:.2f}", "roi_hi": "{:.2f}", "marginal_roi": "{:.2f}",
-            "roi_prior_median": "{:.3g}", "roi_prior_sd": "{:.2f}",
+            "contribution_share_lo": "{:.1%}", "contribution_share_hi": "{:.1%}", "roi_mean": smart_num,
+            "roi_lo": smart_num, "roi_hi": smart_num, "marginal_roi": smart_num, "cpa": smart_num,
+            "roi_prior_median": smart_num, "roi_prior_sd": "{:.2f}",
             "adstock_alpha": "{:.2f}", "adstock_theta": "{:.1f}", "hill_K": "{:.2f}",
             "hill_S": "{:.2f}"}
 
@@ -394,7 +432,7 @@ def build_report(path, *, cfg, summ, dec, pred, metrics, curves, decay, diagnost
         scfmt = {"current_spend": "{:,.0f}", "scenario_spend": "{:,.0f}", "spend_change": "{:+,.0f}",
                  "current_contribution": "{:,.0f}", "scenario_contribution": "{:,.0f}",
                  "delta_contribution": "{:+,.0f}", "delta_lo": "{:+,.0f}", "delta_hi": "{:+,.0f}",
-                 "incremental_roi": "{:.2f}", "prob_delta_positive": "{:.0%}"}
+                 "incremental_roi": smart_num, "prob_delta_positive": "{:.0%}"}
         blocks = []
         for name, d in scenarios.groupby("scenario", sort=False):
             tot = d[d["channel"] == "TOTAL"].iloc[0]
@@ -413,14 +451,14 @@ def build_report(path, *, cfg, summ, dec, pred, metrics, curves, decay, diagnost
 <title>MMM Report</title><style>{CSS}</style></head><body><main>
 <h1>Marketing Mix Model レポート</h1>
 <p class="muted">生成日時 {datetime.now():%Y-%m-%d %H:%M} ／ 期間 {dec['date'].min():%Y-%m-%d} 〜 {dec['date'].max():%Y-%m-%d}（{len(dec)} 週）／
-目的変数 {html.escape(cfg.target_column)} ／ チャネル {len(channels)}<br>
+KPI（目的変数）{K}（列名 {html.escape(cfg.target_column)}）／ チャネル {len(channels)}<br>
 区間はベイズ信用区間（{IL}）：「真の値がこの範囲にある確率が {IL}」という意味です。
 広告貢献シェアの「事前の想定」は ROI 事前分布から計算した値で、推定結果がこれに近く区間も広い場合はデータより事前で決まっている可能性があります。</p>
 <div class="kpis">
-<div class="kpi"><span>総売上</span><b>{total_sales:,.0f}</b></div>
-<div class="kpi"><span>総広告費</span><b>{total_spend:,.0f}</b></div>
-<div class="kpi"><span>広告貢献シェア（推定）</span><b>{ad_share:.1%}</b>{prior_html}</div>
-<div class="kpi"><span>広告全体 ROI</span><b>{blended_roi:.2f}</b></div>
+<div class="kpi"><span>{K}の合計（全 {weeks} 週）</span><b>{jp_num(total_kpi, U)}</b><span>{total_kpi:,.0f}{U}。データの「{html.escape(cfg.target_column)}」列の合計（広告による増分＋広告以外の両方を含む）</span></div>
+<div class="kpi"><span>広告費の合計（全 {weeks} 週）</span><b>{jp_num(total_spend)}</b><span>{total_spend:,.0f}。全チャネルの出稿額の合計</span></div>
+<div class="kpi"><span>広告による増分{K}（推定）</span><b>{jp_num(total_contrib, U)}</b><span>{K}全体の {ad_share:.1%}</span>{prior_html}</div>
+<div class="kpi"><span>増分 1{U or "単位"}あたりの広告費（CPA）</span><b>{smart_num(blended_cpa)}</b><span>{per_spend(blended_roi, U)}（広告全体 ROI = {smart_num(blended_roi)}）</span></div>
 </div>
 
 <h2>収束診断</h2>{diag_html}
@@ -438,22 +476,26 @@ def build_report(path, *, cfg, summ, dec, pred, metrics, curves, decay, diagnost
 
 {base_html}
 
-<h2>出稿割合と売上貢献割合</h2>
-<p class="muted">上：広告費全体に占める各チャネルの出稿金額の割合（合計 100%）。
-下：全売上（KPI）に占める各チャネルの貢献の割合。全チャネルの合計が広告貢献シェア（{ad_share:.1%}）になります。
-上より下の比率が相対的に大きいチャネルほど、費用対効果が高いことを示します（貢献の {IL} 区間は下の表の contribution_share_lo / hi）。</p>
+<h2>出稿割合と{K}への貢献割合</h2>
+<p class="muted">ネイビー：広告費全体に占める各チャネルの出稿金額の割合（合計 100%）。
+水色：{K}全体に占める各チャネルの貢献の割合。全チャネルの合計が広告貢献シェア（{ad_share:.1%}）になります。
+ネイビーに比べて水色が相対的に長いチャネルほど、費用対効果が高いことを示します（貢献の {IL} 区間は下の表の contribution_share_lo / hi）。</p>
 {fig_share(summ)}
 
 <h2>チャネル別 ROI</h2>
-<p class="muted">ROI = 期間内の KPI 増分 ÷ 支出（KPI の単位あたり／広告費 1 単位）。限界ROI = 支出を 1% 増やした場合の 追加 KPI ÷ 追加支出。広告係数は正に制約されています。
+<p class="muted">ROI = 期間内の増分{K} ÷ 広告費（広告費 1 あたり何{U or "単位"}増えたか）。cpa = 増分{K} 1{U or "単位"}あたりの広告費。限界ROI = 広告費を 1% 増やした場合の 追加{K} ÷ 追加広告費。広告係数は正に制約されています。
 roi_prior_median / roi_prior_sd は推定に使った ROI の事前分布（auto = 想定広告シェア × KPI 合計 ÷ 広告費合計）。事後の ROI が事前の中央値に近く区間も広いチャネルは、データより事前で決まっている可能性があります。</p>
 {fig_roi(summ)}
 <div class="scroll">{_table(summ, sfmt)}</div>
 
 {weekly_html}
 
-<h2>期間合計の応答曲線（予算検討用）</h2>
-<p class="muted">横軸は期間合計の出稿額。全期間の出稿を一律に 0〜{cfg.response_curve['max_multiplier']}倍にした場合の総貢献。点線は実績の出稿額。帯は {IL} 区間。</p>
+<h2>期間合計の応答曲線（予算規模を変えたら？）</h2>
+<p class="muted">「分析期間（全 {weeks} 週）の各週の出稿を、すべて同じ倍率で増減していたら、期間全体で{K}がどれだけ増えていたか」を表します。
+横軸 = 期間合計の広告費（実績の 0〜{cfg.response_curve['max_multiplier']} 倍）、縦軸 = 期間合計の増分{K}。点線が実績の広告費、帯は {IL} 区間。
+出稿する週・しない週のパターンや週ごとの強弱は実績のまま、金額だけを一律に変えて、推定した adstock と飽和曲線で毎週の効果を計算し直して合計しています。
+週次の飽和曲線（1 週あたりの効き方）を、実際の出稿パターンで期間全体に積み上げたもので、「年間予算を ○ 倍にしたら？」の検討に使えます。
+実績（点線）付近で曲線がまだ立っていれば増額の余地あり、寝ていれば飽和気味です。</p>
 {fig_response(curves, summ)}
 
 <h2>adstock（持越効果）</h2>

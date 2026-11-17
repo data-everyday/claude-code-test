@@ -67,6 +67,8 @@ python -m mmm run --config mmm_config.yaml
 | 2023-01-02 | 11043 | 0 | 396 | 83 | 106.7 | 0 |
 
 - 欠損・日付重複・負の支出はエラー。週の欠落は警告
+- KPI は売上に限らず、来場者数・CV 件数なども可。`data.kpi_name`（例: 来場者数）と `data.kpi_unit`（例: 人）を
+  指定すると、レポートの表記がその KPI になります（件数系 KPI では「増分 1 人あたりの広告費（CPA）」も表示）
 - 推奨データ量は 2 年（104 週）以上
 
 BigQuery から読む場合は `mmm_config.yaml` の `data.source: bigquery` とし、
