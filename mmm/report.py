@@ -323,9 +323,9 @@ h1{font-size:1.6rem;margin:0 0 4px}h2{font-size:1.15rem;margin:36px 0 10px;paddi
 .warn{background:var(--warnbg);color:var(--warn);border-radius:8px;padding:10px 14px;margin:8px 0}
 .ok{background:#e9f7ef;color:#1e7a46;border-radius:8px;padding:10px 14px;margin:8px 0}
 img{max-width:100%;height:auto}
-.scroll{overflow-x:auto}
-table.tbl{border-collapse:collapse;font-size:.85rem;width:max-content;min-width:100%;table-layout:auto}
-table.tbl th,table.tbl td{padding:6px 10px;border-bottom:1px solid var(--line);text-align:right;white-space:nowrap;overflow:visible}
+.scroll{overflow-x:auto;max-width:100%;-webkit-overflow-scrolling:touch}
+table.tbl{border-collapse:collapse;font-size:.85rem;width:max-content!important;min-width:100%;max-width:none!important;table-layout:auto!important}
+table.tbl th,table.tbl td{padding:6px 10px;border-bottom:1px solid var(--line);text-align:right;white-space:nowrap!important;overflow:visible;width:auto!important;max-width:none!important}
 table.tbl th:first-child,table.tbl td:first-child{text-align:left}
 table.tbl th{background:var(--card)}
 """
