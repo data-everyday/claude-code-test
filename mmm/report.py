@@ -157,6 +157,30 @@ def roi_scale(roi_values) -> tuple[float, str, str]:
     return SPEND_MULTS[-1]
 
 
+def fig_events(ev: pd.DataFrame) -> str:
+    """イベントごとの「該当週 1 週あたりの効果」（区間つき）。ラベルは英語名（フォント非依存）。"""
+    n = len(ev)
+    y = np.arange(n)
+    m, lo, hi = ev["effect_per_week"], ev["effect_lo"], ev["effect_hi"]
+    fig, ax = plt.subplots(figsize=(7.5, 0.55 * n + 1.3))
+    colors = [NAVY if v >= 0 else "#c0504d" for v in m]
+    ax.barh(y, m, color=colors, alpha=0.9, height=0.55)
+    ax.errorbar(m, y, xerr=[m - lo, hi - m], fmt="none", ecolor="#555", capsize=3, lw=1)
+    ax.axvline(0, color="#999", lw=0.8)
+    span = max(float(np.abs(lo).max()), float(np.abs(hi).max()), 1e-9)
+    for i in range(n):
+        x = hi.iloc[i] if m.iloc[i] >= 0 else lo.iloc[i]
+        ax.text(x + (span * 0.02 if m.iloc[i] >= 0 else -span * 0.02), i,
+                f"{m.iloc[i]:+,.0f} ({ev['pct_of_avg_week'].iloc[i]:+.1%})", va="center",
+                ha="left" if m.iloc[i] >= 0 else "right", fontsize=8.5)
+    ax.set_xlim(-span * 1.45 if (lo < 0).any() else 0, span * 1.45)
+    ax.set_yticks(y, ev["event"])
+    ax.invert_yaxis()
+    ax.set_xlabel(f"effect per flagged week (KPI), {interval_label()} interval", fontsize=9)
+    ax.spines[["top", "right"]].set_visible(False)
+    return _img(fig)
+
+
 def fig_roi(summ: pd.DataFrame, econ: dict | None = None) -> str:
     """採算あり: 利益 ROI（1 = 損益分岐）。採算なし: 「広告費 M あたりの増分 KPI」（KPI の単位に合わせて換算）。"""
     if econ:
@@ -338,7 +362,8 @@ def build_report(path, *, cfg, summ, dec, pred, metrics, curves, decay, diagnost
                  weekly_curve: pd.DataFrame | None = None,
                  weekly_points: pd.DataFrame | None = None,
                  prior_share: dict | None = None,
-                 optimal_line: pd.DataFrame | None = None) -> None:
+                 optimal_line: pd.DataFrame | None = None,
+                 events: pd.DataFrame | None = None) -> None:
     IL = interval_label()
     prior_html = ""
     if prior_share:
@@ -424,6 +449,25 @@ def build_report(path, *, cfg, summ, dec, pred, metrics, curves, decay, diagnost
         roi_note = (f"グラフと表は「{per}、{K}が何{U or '単位'}増えたか」（ROI を見やすい単位に換算）。"
                     "採算（KPI 1 単位の金額・粗利率）を入力すると、グラフが利益 ROI（1 = 損益分岐）になります。"
                     "限界 = 今より少し増額したときの効率で、平均より低いほど飽和しています。")
+
+    events_html = ""
+    if events is not None and len(events):
+        ev_view = pd.DataFrame({
+            "イベント": events["label"] + "（" + events["event"] + "）",
+            "該当週数": events["weeks"],
+            f"1 週あたりの効果（{K}）": events["effect_per_week"],
+            f"{IL}区間": [f"{a:+,.0f}〜{b:+,.0f}" for a, b in zip(events["effect_lo"], events["effect_hi"])],
+            "週平均に対する割合": events["pct_of_avg_week"],
+            f"期間中の合計効果（{K}）": events["total_effect"],
+            "効果がプラスの確率": events["prob_positive"],
+        })
+        events_html = (
+            f'<h2>イベント期間の効果（年末年始・GW・お盆・SW など）</h2><p class="muted">'
+            f'フラグが立った週（期間と 1 日でも重なる週）に、{K}が通常の週より何{U or "単位"}増えた（減った）かの推定値です。'
+            '広告・トレンド・季節性などの影響を取り除いたうえでのイベント固有の効果で、括弧内は週平均に対する割合。'
+            '区間が 0 をまたぐイベントは、効果があるとは言い切れません。期間中の合計効果 = 1 週あたりの効果 × 該当週数。</p>'
+            + fig_events(events)
+            + f'<div class="scroll">{_table(ev_view, {f"1 週あたりの効果（{K}）": "{:+,.0f}", "週平均に対する割合": "{:+.1%}", f"期間中の合計効果（{K}）": "{:+,.0f}", "効果がプラスの確率": "{:.0%}"})}</div>')
 
     opt_html = ""
     if opt:
@@ -553,6 +597,8 @@ KPI（目的変数）{K}（列名 {html.escape(cfg.target_column)}）／ チャ�
 {fig_decomp(dec, channels)}
 
 {base_html}
+
+{events_html}
 
 <h2>出稿割合と{K}への貢献割合</h2>
 <p class="muted">ネイビー：広告費全体に占める各チャネルの出稿金額の割合（合計 100%）。

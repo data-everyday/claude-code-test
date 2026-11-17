@@ -87,6 +87,42 @@ def baseline_components(md: ModelData, fit: FitResult) -> pd.DataFrame:
                          "controls": other.mean(axis=0)})
 
 
+def event_effects(md: ModelData, fit: FitResult, cfg) -> pd.DataFrame:
+    """イベントフラグ（年末年始・GW・お盆・SW・任意のイベント）の効果。
+
+    フラグは標準化して投入しているので、「フラグ 0 → 1」の効果 = 係数 ÷ 標準偏差 × KPI スケール。
+    1 週あたりの効果・週平均 KPI に対する割合・期間中の合計（効果 × 該当週数）を事後分布で返す。
+    """
+    from .events import BUILTIN_EVENTS, EVENT_PREFIX
+
+    if "control_coef" not in fit.posterior:
+        return pd.DataFrame()
+    coef = fit.posterior["control_coef"]  # (D, K)
+    labels = {**{k: v["label"] for k, v in BUILTIN_EVENTS.items()}}
+    rows = []
+    avg_kpi = float(md.y.mean())
+    for k, col in enumerate(md.control_names):
+        if not col.startswith(EVENT_PREFIX):
+            continue
+        name = col[len(EVENT_PREFIX):]
+        raw = md.controls[:, k] * md.control_std[k] + md.control_mean[k]
+        weeks = int(round(raw.sum()))
+        eff = coef[:, k] / md.control_std[k] * md.y_scale  # (D,) 該当週 1 週あたり
+        lo, hi = _q(eff)
+        rows.append({
+            "event": name,
+            "label": labels.get(name, name),
+            "weeks": weeks,
+            "effect_per_week": float(eff.mean()),
+            "effect_lo": float(lo),
+            "effect_hi": float(hi),
+            "pct_of_avg_week": float(eff.mean() / avg_kpi) if avg_kpi else np.nan,
+            "total_effect": float(eff.mean() * weeks),
+            "prob_positive": float((eff > 0).mean()),
+        })
+    return pd.DataFrame(rows)
+
+
 def channel_summary(md: ModelData, fit: FitResult, mmm: BayesianMMM) -> pd.DataFrame:
     """チャネル別の 総貢献・貢献シェア・ROI（信用区間）・限界 ROI。"""
     p = fit.posterior

@@ -138,6 +138,9 @@ def test_end_to_end_positive_effects(tmp_path):
     np.testing.assert_allclose(g["attributed_contribution"], g["contribution"], rtol=1e-6)
     assert (pts.loc[pts["spend"] == 0, "steady_contribution"] == 0).all()
     assert (cfg.output_dir / "weekly_saturation_curve.csv").exists()
+    ev = pd.read_csv(cfg.output_dir / "event_effects.csv")  # 既定の 4 イベント
+    assert set(ev["event"]) <= {"year_end", "golden_week", "obon", "silver_week"} and len(ev) >= 3
+    assert (ev["effect_lo"] <= ev["effect_per_week"]).all() and (ev["effect_per_week"] <= ev["effect_hi"]).all()
 
     sc = res["scenarios"]
     same = sc[(sc["scenario"] == "same") & (sc["channel"] == "TOTAL")].iloc[0]
