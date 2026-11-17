@@ -150,13 +150,13 @@ ROI 事前の中央値 = ad_share × KPI 合計 ÷ 広告費合計      （既�
 
 ### イベント期間のフラグ（任意）
 
-年末年始・GW・セールなど、滑らかな季節性では捉えきれない短い山・谷を吸収するために、
+年末年始・GW・お盆・SW・セールなど、滑らかな季節性では捉えきれない短い山・谷を吸収するために、
 「その週が期間に 1 日でも重なれば 1」の列を自動で作り、コントロール変数に加えます。
 
 ```yaml
 events:
   week_anchor: start          # date 列が週の初日なら start、最終日なら end
-  builtin: [year_end, golden_week, obon]   # 年末年始(12/29-1/3)・GW(4/29-5/5)・お盆(8/13-8/16)
+  builtin: [year_end, golden_week, obon, silver_week]   # 年末年始(12/28-1/3)・GW(5/3-5/6)・お盆(8/13-8/16)・SW(9/19-9/23)
   custom:
     - name: summer_sale
       sign: positive          # free / positive / negative（既定 free）
@@ -165,6 +165,7 @@ events:
         - 2025-07-01~2025-07-14
 ```
 
+- `events` を書かなければ上の 4 つ（年末年始・GW・お盆・SW）を既定で使用。使わない場合は `events: null` か `builtin: []`
 - データ期間内に該当週がないイベントは自動で除外
 - 合成データ（年末年始の週に +2,500）では、フラグなしだと山を説明できず R² 0.80・TV の ROI も不安定、
   フラグありで効果 +2,412 を推定、R² 0.92 に改善

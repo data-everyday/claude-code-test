@@ -182,21 +182,22 @@ def parse_events(spec) -> tuple[list[dict[str, Any]], str]:
 
     events:
       week_anchor: start            # date 列が週の初日なら start、最終日なら end
-      builtin: [year_end, golden_week, obon]   # 組み込み（年末年始・GW・お盆）。{name, sign} も可
+      builtin: [year_end, golden_week, obon, silver_week]   # 組み込み（省略時はこの 4 つ）。{name, sign} も可
       custom:
         - name: summer_sale
           sign: positive            # free / positive / negative（既定 free）
           periods: [[2024-07-01, 2024-07-14], "2025-07-01~2025-07-14"]
     """
-    from .events import BUILTIN_EVENTS, parse_custom_periods
+    from .events import BUILTIN_EVENTS, DEFAULT_BUILTIN, parse_custom_periods
 
-    if not spec:
+    if spec is None:  # events: null → イベントフラグを使わない
         return [], "start"
     anchor = spec.get("week_anchor", "start")
     if anchor not in ("start", "end"):
         raise ValueError("events.week_anchor は start か end です")
     out = []
-    for b in spec.get("builtin") or []:
+    builtin = spec.get("builtin", DEFAULT_BUILTIN)
+    for b in builtin or []:
         b = {"name": b} if isinstance(b, str) else dict(b)
         if b["name"] not in BUILTIN_EVENTS:
             raise ValueError(f"組み込みイベント {b['name']} はありません（{sorted(BUILTIN_EVENTS)}）")
@@ -296,7 +297,9 @@ def load_config(path: str | Path, overrides: dict[str, Any] | None = None) -> Co
             raise ValueError(f"control {c.column}: sign は {SIGNS} のいずれか")
         controls.append(c)
 
-    events, week_anchor = parse_events(_get(raw, "events"))
+    # events を書かなければ組み込みイベント（年末年始・GW・お盆・SW）を既定で使う。
+    # 使わない場合は events: null か events: {builtin: []}
+    events, week_anchor = parse_events(raw["events"] if "events" in raw else {})
     existing = {c.column for c in controls}
     for ev in events:
         col = EVENT_PREFIX + ev["name"]

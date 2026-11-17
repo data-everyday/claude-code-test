@@ -303,6 +303,15 @@ def test_event_flags_and_season_period(tmp_path):
     assert list(week_flags(dates, periods, "start")) == [1.0, 1.0, 0.0]  # 12/23 週は 12/29 を含む
     assert list(week_flags(dates, periods, "end")) == [0.0, 1.0, 1.0]
 
+    # 指定期間（1 日でも重なればフラグ）
+    wk = pd.Series(pd.to_datetime(["2025-04-28", "2025-05-05", "2025-08-11", "2025-08-18",
+                                   "2025-09-15", "2025-09-22", "2025-12-22"]))
+    yrs = range(2024, 2027)
+    assert list(week_flags(wk, builtin_periods("golden_week", yrs))) == [1, 1, 0, 0, 0, 0, 0]  # 4/28 週は 5/3,4 を含む
+    assert list(week_flags(wk, builtin_periods("obon", yrs))) == [0, 0, 1, 0, 0, 0, 0]
+    assert list(week_flags(wk, builtin_periods("silver_week", yrs))) == [0, 0, 0, 0, 1, 1, 0]
+    assert list(week_flags(wk, builtin_periods("year_end", yrs))) == [0, 0, 0, 0, 0, 0, 1]  # 12/22〜28 は 12/28 を含む
+
     assert parse_season("四半期（13週）") == 13.0 and parse_season("なし") is None
     assert parse_season(True) == 52.18
     assert parse_custom_events("夏セール=2024-07-01~2024-07-14, 2025-07-01; bf=2024-11-29") == [
@@ -378,3 +387,12 @@ def test_hill_marginal_and_optimal_line(tmp_path):
     ol_hi = optimal_weekly_spend(md, mmm, fit, {"value_per_kpi": 10.0, "gross_margin": 1.0})
     assert (ol_hi["optimal_weekly_spend"] >= ol["optimal_weekly_spend"]).all()
     assert load_config(path, {"economics": None}).economics is None
+
+
+def test_builtin_events_default_on(tmp_path):
+    path = _write_cfg(tmp_path)  # events を書いていない
+    cfg = load_config(path)
+    assert [c.column for c in cfg.controls if c.generated] == [
+        "event_year_end", "event_golden_week", "event_obon", "event_silver_week"]
+    assert not [c for c in load_config(path, {"events": None}).controls if c.generated]
+    assert not [c for c in load_config(path, {"events.builtin": []}).controls if c.generated]

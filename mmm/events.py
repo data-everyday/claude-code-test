@@ -1,4 +1,4 @@
-"""イベント期間フラグ（年末年始・GW・お盆・任意のセール期間など）を週次データに追加する。
+"""イベント期間フラグ（年末年始・GW・お盆・SW・任意のセール期間など）を週次データに追加する。
 
 その週（7 日間）がイベント期間と 1 日でも重なれば 1、重ならなければ 0 の列を作り、
 コントロール変数としてモデルに入れる。季節性の滑らかな波では捉えられない短い山・谷を吸収させる。
@@ -15,10 +15,13 @@ log = logging.getLogger(__name__)
 
 # 組み込みイベント（日本）。各年の (月, 日) 範囲。年をまたぐものは開始 > 終了で表す。
 BUILTIN_EVENTS = {
-    "year_end": {"label": "年末年始", "start": (12, 29), "end": (1, 3)},
-    "golden_week": {"label": "GW", "start": (4, 29), "end": (5, 5)},
+    "year_end": {"label": "年末年始", "start": (12, 28), "end": (1, 3)},
+    "golden_week": {"label": "GW", "start": (5, 3), "end": (5, 6)},
     "obon": {"label": "お盆", "start": (8, 13), "end": (8, 16)},
+    "silver_week": {"label": "SW", "start": (9, 19), "end": (9, 23)},
 }
+# events を設定しない場合に既定で使う組み込みイベント
+DEFAULT_BUILTIN = ["year_end", "golden_week", "obon", "silver_week"]
 
 EVENT_PREFIX = "event_"
 
