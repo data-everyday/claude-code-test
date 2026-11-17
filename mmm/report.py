@@ -410,6 +410,11 @@ def build_report(path, *, cfg, summ, dec, pred, metrics, curves, decay, diagnost
                        '「週にいくら出すと、その出稿でどれだけ効くか」を読むためのグラフで、出稿額の意思決定にはこちらが便利です。'
                        '（毎週同程度の額を出稿している状況を前提とした値です。実際の出稿の並びで持ち越し分を配分し直した実績ベースの値は '
                        'weekly_saturation_points.csv の attributed_contribution 列にあります）</p>'
+                       + ('' if optimal_line is not None else
+                          '<div class="warn">最適な出稿ライン（限界利益ROI = 1 の縦線）・損益分岐線・現在の平均出稿額の線は、'
+                          '採算が未入力のため表示していません。Colab の③「採算（任意）」で「KPI 1 単位の金額」'
+                          '（例: 来場者 1 人あたりの売上）と「粗利率」を入力するか、設定ファイルの economics.value_per_kpi / '
+                          'gross_margin を指定すると表示されます。</div>')
                        + fig_weekly_saturation(weekly_curve, weekly_points, channels,
                                                optimal_line, cfg.economics, xcol="spend"))
         weekly_html += ('<h2>週次の飽和曲線と実績（横軸＝adstock 後の出稿額）</h2><p class="muted">横軸 = その週に効いている出稿額'
