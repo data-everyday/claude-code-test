@@ -210,7 +210,8 @@ def response_curves(md: ModelData, mmm: BayesianMMM, fit: FitResult,
 
 def weekly_saturation(md: ModelData, mmm: BayesianMMM, fit: FitResult, n_draws: int = 200,
                       n_points: int = 160, max_ratio: float = 1.3,
-                      optimal: pd.DataFrame | None = None
+                      optimal: pd.DataFrame | None = None,
+                      sat_levels: pd.DataFrame | None = None
                       ) -> tuple[pd.DataFrame, pd.DataFrame]:
     """週次の飽和曲線と実績週の点。
 
@@ -237,6 +238,10 @@ def weekly_saturation(md: ModelData, mmm: BayesianMMM, fit: FitResult, n_draws: 
             o = optimal.loc[optimal["channel"] == ch, "optimal_weekly_spend"]
             if len(o) and np.isfinite(o.iloc[0]):
                 xmax = min(max(xmax, float(o.iloc[0]) * 1.15), actual_max * 5)
+        if sat_levels is not None:  # 飽和度 75% の線が見えるよう広げる（実績最大の 3 倍まで）
+            r = sat_levels.loc[sat_levels["channel"] == ch]
+            if len(r) and "spend_at_75" in r:
+                xmax = max(xmax, min(float(r["spend_at_75"].iloc[0]) * 1.1, actual_max * 3))
         grid = np.linspace(0, xmax, n_points)
         xs = grid / md.spend_scale[i]
         D = len(p["beta"])
@@ -274,6 +279,45 @@ def weekly_saturation(md: ModelData, mmm: BayesianMMM, fit: FitResult, n_draws: 
                                "steady_contribution": steady[t],
                                "attributed_contribution": attributed[t]})
     return pd.DataFrame(curve_rows), pd.DataFrame(point_rows)
+
+
+def saturation_levels(md: ModelData, mmm: BayesianMMM, fit: FitResult,
+                      levels=(0.25, 0.5, 0.75), n_draws: int = 400) -> pd.DataFrame:
+    """最大効果の各割合（既定 25/50/75%）に達する週次出稿額と、現在の飽和度。
+
+    Hill 関数 x^S/(x^S+K^S) が p になる x は  x_p = K × (p/(1-p))^(1/S)（スケール済み）。
+    週次出稿額で見るため、毎週同じ額を出稿し続ける定常状態（adstock 後 = 週次出稿額）を仮定。
+    「最大効果」は曲線の上限を外挿した値なので、実績の最大出稿額を超える到達額は不確実。
+    """
+    p = subsample(fit.posterior, n_draws)
+    lo_q, hi_q = interval_bounds()
+    rows = []
+    for i, ch in enumerate(md.channel_names):
+        scale = md.spend_scale[i]
+        K, S = p["K"][:, i], p["S"][:, i]
+        cur = float(md.spend[:, i].mean())
+        on_air = md.spend[:, i][md.spend[:, i] > 0]
+        cur_on = float(on_air.mean()) if len(on_air) else 0.0
+        actual_max = float(md.spend[:, i].max())
+        sat_now = hill_np(np.full((len(K), 1, 1), cur / scale), K[:, None], S[:, None])[:, 0, 0]
+        sat_on = hill_np(np.full((len(K), 1, 1), cur_on / scale), K[:, None], S[:, None])[:, 0, 0]
+        row = {"channel": ch, "current_weekly_spend": cur, "current_on_air_weekly_spend": cur_on,
+               "max_weekly_spend": actual_max,
+               "saturation_now": float(np.median(sat_now)),
+               "saturation_now_lo": float(np.quantile(sat_now, lo_q)),
+               "saturation_now_hi": float(np.quantile(sat_now, hi_q)),
+               "saturation_on_air": float(np.median(sat_on))}
+        for lv in levels:
+            x = K * (lv / (1 - lv)) ** (1 / S) * scale
+            tag = f"{int(round(lv * 100))}"
+            row[f"spend_at_{tag}"] = float(np.median(x))
+            row[f"spend_at_{tag}_lo"] = float(np.quantile(x, lo_q))
+            row[f"spend_at_{tag}_hi"] = float(np.quantile(x, hi_q))
+        sn = row["saturation_now"]
+        row["zone"] = ("増額の余地あり（飽和度 50% 未満）" if sn < 0.5 else
+                       "適正域（飽和度 50〜75%）" if sn < 0.75 else "飽和気味（飽和度 75% 以上）")
+        rows.append(row)
+    return pd.DataFrame(rows)
 
 
 def _hill_marginal(u: np.ndarray, K: np.ndarray, S: np.ndarray) -> np.ndarray:

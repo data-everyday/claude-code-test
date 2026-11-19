@@ -399,3 +399,25 @@ def test_builtin_events_default_on(tmp_path):
         "event_year_end", "event_golden_week", "event_obon", "event_silver_week"]
     assert not [c for c in load_config(path, {"events": None}).controls if c.generated]
     assert not [c for c in load_config(path, {"events.builtin": []}).controls if c.generated]
+
+
+def test_saturation_levels_formula(tmp_path):
+    from mmm.analysis import saturation_levels
+
+    cfg = load_config(_write_cfg(tmp_path))
+    df = pd.read_csv(tmp_path / "d.csv")
+    md = build_model_data(validate_dataframe(df, cfg), cfg)
+    mmm = BayesianMMM(cfg, md)
+    fit = mmm.fit()
+    sl = saturation_levels(md, mmm, fit)
+    assert (sl["spend_at_25"] < sl["spend_at_50"]).all() and (sl["spend_at_50"] < sl["spend_at_75"]).all()
+    # 50% 到達額 = 半飽和点 K（の中央値）× スケール
+    k_med = np.median(fit.posterior["K"], axis=0) * md.spend_scale
+    np.testing.assert_allclose(sl["spend_at_50"], k_med, rtol=0.05)
+    # 到達額での Hill の値がその割合になる（事後中央値のパラメータで確認）
+    i = 0
+    K, S = np.median(fit.posterior["K"][:, i]), np.median(fit.posterior["S"][:, i])
+    x75 = K * 3 ** (1 / S)
+    assert hill_np(np.array([[x75]]), np.array([K]), np.array([S]))[0, 0] == pytest.approx(0.75)
+    assert set(sl["zone"]).issubset({"増額の余地あり（飽和度 50% 未満）", "適正域（飽和度 50〜75%）",
+                                     "飽和気味（飽和度 75% 以上）"})

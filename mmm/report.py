@@ -116,6 +116,7 @@ def fig_baseline(base: pd.DataFrame, cp_dates: list) -> str:
     return _img(fig)
 
 
+ZONE_COLORS = ("#e3f2e1", "#fdf3d6", "#fbe3e0")  # 増額余地 / 適正 / 飽和気味
 NAVY = "#1b2a4a"  # 出稿（spend）を表す色
 LIGHT_BLUE = "#7cc4f0"  # 貢献（contribution）を表す色
 
@@ -237,8 +238,9 @@ def fig_response(curves: pd.DataFrame, summ: pd.DataFrame) -> str:
 
 def fig_weekly_saturation(curve: pd.DataFrame, points: pd.DataFrame, chans: list[str],
                           optimal: pd.DataFrame | None = None, econ: dict | None = None,
-                          xcol: str = "effective_spend") -> str:
-    """xcol = effective_spend（adstock 後）または spend（その週の出稿額）。"""
+                          xcol: str = "effective_spend", sat: pd.DataFrame | None = None) -> str:
+    """xcol = effective_spend（adstock 後）または spend（その週の出稿額）。
+    sat を渡すと、飽和度 25/50/75% の縦線と効率ゾーン（背景色）を描く。"""
     n = len(chans)
     cols = min(n, 3)
     rows = int(np.ceil(n / cols))
@@ -253,6 +255,10 @@ def fig_weekly_saturation(curve: pd.DataFrame, points: pd.DataFrame, chans: list
             o_ = optimal[optimal["channel"] == ch].iloc[0]["optimal_weekly_spend"]
             if np.isfinite(o_):
                 xlim = min(max(xlim, o_ * 1.15), float(pt_[xcol].max()) * 5)
+        srow = None
+        if sat is not None:
+            srow = sat[sat["channel"] == ch].iloc[0]
+            xlim = max(xlim, min(srow["spend_at_75"] * 1.1, float(pt_[xcol].max()) * 3))
         c = curve[(curve["channel"] == ch) & (curve["effective_spend"] <= xlim)]
         ax.fill_between(c["effective_spend"], c["contribution_lo"], c["contribution_hi"],
                         color=color, alpha=0.18, lw=0)
@@ -277,7 +283,23 @@ def fig_weekly_saturation(curve: pd.DataFrame, points: pd.DataFrame, chans: list
                 ax.axvline(o["optimal_weekly_spend"], color=NAVY, lw=1.6,
                            label="optimal (marginal profit ROI = 1)" if i == 0 else None)
             ax.set_ylim(0, ymax * 1.05)
-        ax.set_title(ch, fontsize=10)
+        if srow is not None:
+            x25, x50, x75 = srow["spend_at_25"], srow["spend_at_50"], srow["spend_at_75"]
+            right = float(c["effective_spend"].max())
+            for a, b, col, lab in ((0, x50, ZONE_COLORS[0], "room to grow (<50% of max)"),
+                                   (x50, x75, ZONE_COLORS[1], "efficient (50-75%)"),
+                                   (x75, right, ZONE_COLORS[2], "saturating (>75%)")):
+                if a < right:
+                    ax.axvspan(a, min(b, right), color=col, alpha=0.5, lw=0, zorder=0,
+                               label=lab if i == 0 else None)
+            ytop = ax.get_ylim()[1]
+            for xv, lab in ((x25, "25%"), (x50, "50%"), (x75, "75%")):
+                if xv <= right:
+                    ax.axvline(xv, color="#6b7280", ls=(0, (4, 3)), lw=0.8, zorder=1)
+                    ax.text(xv, ytop * 0.98, f" {lab}", fontsize=7, color="#374151", va="top")
+            ax.set_title(f"{ch}  (now {srow['saturation_now']:.0%} of max)", fontsize=10)
+        else:
+            ax.set_title(ch, fontsize=10)
         ax.set_xlabel("weekly effective spend (after adstock)" if xcol == "effective_spend"
                       else "weekly spend", fontsize=8)
         ax.set_ylabel("weekly contribution" if xcol == "effective_spend"
@@ -286,9 +308,9 @@ def fig_weekly_saturation(curve: pd.DataFrame, points: pd.DataFrame, chans: list
         ax.spines[["top", "right"]].set_visible(False)
     for j in range(n, rows * cols):
         axes[j // cols][j % cols].axis("off")
-    if optimal is not None and v:
+    if (optimal is not None and v) or sat is not None:
         fig.legend(loc="lower center", ncol=3, fontsize=8, frameon=False, bbox_to_anchor=(0.5, -0.02))
-        fig.tight_layout(rect=(0, 0.05, 1, 1))
+        fig.tight_layout(rect=(0, 0.07, 1, 1))
     else:
         fig.tight_layout()
     return _img(fig)
@@ -363,7 +385,8 @@ def build_report(path, *, cfg, summ, dec, pred, metrics, curves, decay, diagnost
                  weekly_points: pd.DataFrame | None = None,
                  prior_share: dict | None = None,
                  optimal_line: pd.DataFrame | None = None,
-                 events: pd.DataFrame | None = None) -> None:
+                 events: pd.DataFrame | None = None,
+                 sat_levels: pd.DataFrame | None = None) -> None:
     IL = interval_label()
     prior_html = ""
     if prior_share:
@@ -499,6 +522,35 @@ def build_report(path, *, cfg, summ, dec, pred, metrics, curves, decay, diagnost
         base_html = (f'<h2>ベースラインの内訳</h2><p class="muted">{trend_desc}。下段は季節性とコントロール変数の効果。</p>'
                      + fig_baseline(baseline, changepoint_dates or []))
 
+    sat_html = ""
+    if sat_levels is not None and len(sat_levels):
+        def _rng(r, tag):
+            v, lo, hi = r[f"spend_at_{tag}"], r[f"spend_at_{tag}_lo"], r[f"spend_at_{tag}_hi"]
+            out = f"{smart_num(v)}（{smart_num(lo)}〜{smart_num(hi)}）"
+            return out + (" ※実績の範囲外" if v > r["max_weekly_spend"] else "")
+        sv = pd.DataFrame({
+            "チャネル": sat_levels["channel"],
+            "現在の平均週次出稿額": sat_levels["current_weekly_spend"],
+            "出稿週の平均": sat_levels["current_on_air_weekly_spend"],
+            "出稿週の平均での飽和度": sat_levels["saturation_on_air"],
+            "現在の飽和度": [f"{a:.0%}（{b:.0%}〜{c:.0%}）" for a, b, c in
+                       zip(sat_levels["saturation_now"], sat_levels["saturation_now_lo"],
+                           sat_levels["saturation_now_hi"])],
+            "最大効果の 25% に達する額": sat_levels.apply(lambda r: _rng(r, "25"), axis=1),
+            "50%（半飽和点）": sat_levels.apply(lambda r: _rng(r, "50"), axis=1),
+            "75%": sat_levels.apply(lambda r: _rng(r, "75"), axis=1),
+            "実績の最大週次出稿額": sat_levels["max_weekly_spend"],
+            "ゾーン": sat_levels["zone"],
+        })
+        sat_html = (
+            '<h3>飽和度の目安（最大効果の 25% / 50% / 75% に達する週次出稿額）</h3><p class="muted">'
+            '「最大効果」は、出稿を増やし続けたときに曲線が行き着く上限（1 週あたり）です。'
+            'グラフの点線が各割合に達する週次出稿額、背景色は 緑 = 増額の余地あり（50% 未満）、'
+            '黄 = 適正域（50〜75%）、赤 = 飽和気味（75% 以上）。タイトルの「now ○%」は現在の平均週次出稿額での飽和度です。'
+            '上限は外挿した値のため、実績の最大出稿額を超える到達額（※実績の範囲外）は不確実で、区間も広くなります。'
+            '出稿する週・しない週がある媒体は、「出稿週の平均」と見比べてください。</p>'
+            + f'<div class="scroll">{_table(sv, {"現在の平均週次出稿額": smart_num, "出稿週の平均": smart_num, "出稿週の平均での飽和度": "{:.0%}", "実績の最大週次出稿額": smart_num})}</div>')
+
     weekly_html = ""
     if weekly_curve is not None and weekly_points is not None:
         weekly_html = (f'<h2>週次の飽和曲線（横軸＝その週の出稿額）</h2><p class="muted">'
@@ -514,7 +566,9 @@ def build_report(path, *, cfg, summ, dec, pred, metrics, curves, decay, diagnost
                           '（例: 来場者 1 人あたりの売上）と「粗利率」を入力するか、設定ファイルの economics.value_per_kpi / '
                           'gross_margin を指定すると表示されます。</div>')
                        + fig_weekly_saturation(weekly_curve, weekly_points, channels,
-                                               optimal_line, cfg.economics, xcol="spend"))
+                                               optimal_line, cfg.economics, xcol="spend",
+                                               sat=sat_levels)
+                       + sat_html)
         weekly_html += ('<h2>週次の飽和曲線と実績（横軸＝adstock 後の出稿額）</h2><p class="muted">横軸 = その週に効いている出稿額'
                        '（adstock 適用後。過去の出稿の持ち越しを含み、単位は出稿額と同じ）、縦軸 = その週の貢献。'
                        f'線は推定した飽和曲線（帯は {IL} 区間）、〇は実績の各週。〇が曲線の平らな部分に多いほど、'
