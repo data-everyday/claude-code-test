@@ -65,6 +65,7 @@ class Config:
     output_bq: dict[str, Any] = field(default_factory=dict)
     interval: float = 0.95  # 信用区間の幅
     economics: dict[str, Any] | None = None  # {value_per_kpi, gross_margin}
+    cpa_lines: list[float] = field(default_factory=lambda: [30000, 50000, 100000, 150000])
     scenarios: list[dict[str, Any]] = field(default_factory=list)
 
 
@@ -370,5 +371,7 @@ def load_config(path: str | Path, overrides: dict[str, Any] | None = None) -> Co
         output_bq=_get(raw, "output.bigquery", {}) or {},
         interval=_interval(_get(raw, "output.interval", 0.95)),
         economics=_economics(_get(raw, "economics")),
+        cpa_lines=[float(x) for x in (_get(raw, "report.cpa_lines", [30000, 50000, 100000, 150000]) or [])
+                   if float(x) > 0],
         scenarios=_get(raw, "scenarios", []) or [],
     )

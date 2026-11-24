@@ -117,6 +117,16 @@ def fig_baseline(base: pd.DataFrame, cp_dates: list) -> str:
 
 
 NAVY = "#1b2a4a"  # 出稿（spend）を表す色
+CPA_COLOR = "#9a3412"  # 平均 CPA の線
+
+
+def _short_money(v: float) -> str:
+    """グラフ内ラベル用（日本語フォント非依存）: 30000 → 30k、1500000 → 1,500k。"""
+    if v >= 1e3:
+        return f"{v / 1e3:,.0f}k"
+    return f"{v:,.0f}"
+
+
 LIGHT_BLUE = "#7cc4f0"  # 貢献（contribution）を表す色
 
 
@@ -237,7 +247,8 @@ def fig_response(curves: pd.DataFrame, summ: pd.DataFrame) -> str:
 
 def fig_weekly_saturation(curve: pd.DataFrame, points: pd.DataFrame, chans: list[str],
                           optimal: pd.DataFrame | None = None, econ: dict | None = None,
-                          xcol: str = "effective_spend", sat: pd.DataFrame | None = None) -> str:
+                          xcol: str = "effective_spend", sat: pd.DataFrame | None = None,
+                          cpa: pd.DataFrame | None = None) -> str:
     """xcol = effective_spend（adstock 後）または spend（その週の出稿額）。
     sat を渡すと、飽和度 25/50/75% の縦線と効率ゾーン（背景色）を描く。"""
     n = len(chans)
@@ -245,6 +256,7 @@ def fig_weekly_saturation(curve: pd.DataFrame, points: pd.DataFrame, chans: list
     rows = int(np.ceil(n / cols))
     fig, axes = plt.subplots(rows, cols, figsize=(4.2 * cols, 3.4 * rows), squeeze=False)
     v = econ["value_per_kpi"] * econ["gross_margin"] if econ else None
+    cpa_labeled = False
     for i, ch in enumerate(chans):
         ax = axes[i // cols][i % cols]
         color = PALETTE[i % len(PALETTE)]
@@ -290,6 +302,17 @@ def fig_weekly_saturation(curve: pd.DataFrame, points: pd.DataFrame, chans: list
                 if xv <= right:
                     ax.axvline(xv, color="#6b7280", ls=(0, (4, 3)), lw=0.8, zorder=1)
                     ax.text(xv, ytop * 0.98, f" {lab}", fontsize=7, color="#374151", va="top")
+        if cpa is not None and len(cpa):
+            right = float(c["effective_spend"].max())
+            ybot = ax.get_ylim()[1]
+            for _, r in cpa[cpa["channel"] == ch].iterrows():
+                xv = r["spend_at_cpa"]
+                if np.isfinite(xv) and 0 < xv <= right:
+                    ax.axvline(xv, color=CPA_COLOR, ls=(0, (1, 2)), lw=1.1, zorder=1,
+                               label="average CPA lines (spend / KPI)" if not cpa_labeled else None)
+                    cpa_labeled = True
+                    ax.text(xv, ybot * 0.03, f" CPA {_short_money(r['cpa'])}", fontsize=7,
+                            color=CPA_COLOR, rotation=90, va="bottom", ha="right")
         ax.set_title(ch, fontsize=10)
         ax.set_xlabel("weekly effective spend (after adstock)" if xcol == "effective_spend"
                       else "weekly spend", fontsize=8)
@@ -299,7 +322,7 @@ def fig_weekly_saturation(curve: pd.DataFrame, points: pd.DataFrame, chans: list
         ax.spines[["top", "right"]].set_visible(False)
     for j in range(n, rows * cols):
         axes[j // cols][j % cols].axis("off")
-    if optimal is not None and v:
+    if (optimal is not None and v) or cpa_labeled:
         fig.legend(loc="lower center", ncol=3, fontsize=8, frameon=False, bbox_to_anchor=(0.5, -0.02))
         fig.tight_layout(rect=(0, 0.07, 1, 1))
     else:
@@ -377,7 +400,8 @@ def build_report(path, *, cfg, summ, dec, pred, metrics, curves, decay, diagnost
                  prior_share: dict | None = None,
                  optimal_line: pd.DataFrame | None = None,
                  events: pd.DataFrame | None = None,
-                 sat_levels: pd.DataFrame | None = None) -> None:
+                 sat_levels: pd.DataFrame | None = None,
+                 cpa_levels: pd.DataFrame | None = None) -> None:
     IL = interval_label()
     prior_html = ""
     if prior_share:
@@ -557,6 +581,30 @@ def build_report(path, *, cfg, summ, dec, pred, metrics, curves, decay, diagnost
             '上限は外挿した値のため、実績の最大出稿額を超える到達額（※実績の範囲外）は不確実で、区間も広くなります。</p>'
             + f'<div class="scroll">{_table(sv, {"実績の最大週次出稿額": smart_num})}</div>')
 
+    cpa_html = ""
+    if cpa_levels is not None and len(cpa_levels):
+        def _cpa_txt(r):
+            v = r["spend_at_cpa"]
+            if v == 0:
+                return "届かない（どの額でも平均 CPA がこれより高い）"
+            if not np.isfinite(v):
+                return "実績の 5 倍以上"
+            hi = "5 倍以上" if not np.isfinite(r["spend_at_cpa_hi"]) else smart_num(r["spend_at_cpa_hi"])
+            out = f"{smart_num(v)}（{smart_num(r['spend_at_cpa_lo'])}〜{hi}）"
+            return out + (" ※実績の範囲外" if v > r["max_weekly_spend"] else "")
+
+        cv = cpa_levels.assign(txt=cpa_levels.apply(_cpa_txt, axis=1))
+        cv = cv.pivot(index="channel", columns="cpa", values="txt")
+        cv = cv.reindex(index=channels)
+        cv.columns = [f"平均CPA {c / 1e4:g}万円" if c >= 1e4 else f"平均CPA {c:,.0f}円" for c in cv.columns]
+        cv = cv.reset_index().rename(columns={"channel": "チャネル"})
+        cpa_html = (
+            f'<h3>平均 CPA ラインの週次出稿額</h3><p class="muted">「その週の出稿額 ÷ その出稿で得た{K}（持ち越し込み）」'
+            '＝ 平均 CPA が各金額に達する週次出稿額です。出稿を増やすほど飽和で平均 CPA は上がるので、'
+            '「この額までなら 1 あたり平均 ○円以内で獲得できる」上限の目安になります。グラフの茶色の点線（ラベル CPA ○k、k = 千円）で表示し、'
+            'グラフの範囲外の線は描いていません。毎週同じ額を出稿し続ける前提の値です。</p>'
+            f'<div class="scroll">{_table(cv)}</div>')
+
     weekly_html = ""
     if weekly_curve is not None and weekly_points is not None:
         weekly_html = (f'<h2>週次の飽和曲線（横軸＝その週の出稿額）</h2><p class="muted">'
@@ -573,8 +621,8 @@ def build_report(path, *, cfg, summ, dec, pred, metrics, curves, decay, diagnost
                           'gross_margin を指定すると表示されます。</div>')
                        + fig_weekly_saturation(weekly_curve, weekly_points, channels,
                                                optimal_line, cfg.economics, xcol="spend",
-                                               sat=sat_levels)
-                       + sat_html)
+                                               sat=sat_levels, cpa=cpa_levels)
+                       + sat_html + cpa_html)
         weekly_html += ('<h2>週次の飽和曲線と実績（横軸＝adstock 後の出稿額）</h2><p class="muted">横軸 = その週に効いている出稿額'
                        '（adstock 適用後。過去の出稿の持ち越しを含み、単位は出稿額と同じ）、縦軸 = その週の貢献。'
                        f'線は推定した飽和曲線（帯は {IL} 区間）、〇は実績の各週。〇が曲線の平らな部分に多いほど、'

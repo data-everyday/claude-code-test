@@ -307,6 +307,41 @@ def saturation_levels(md: ModelData, mmm: BayesianMMM, fit: FitResult,
     return pd.DataFrame(rows)
 
 
+def cpa_levels(md: ModelData, mmm: BayesianMMM, fit: FitResult, thresholds,
+               n_draws: int = 400, n_grid: int = 1000, max_ratio: float = 5.0) -> pd.DataFrame:
+    """平均 CPA（週次出稿額 ÷ その出稿が持ち越し込みで生む KPI）が各しきい値に達する週次出稿額。
+
+    飽和曲線では出稿を増やすほど平均 CPA が上がるので、「平均 CPA がしきい値以下で出稿できる上限額」を返す
+    （S 字で少額側も CPA が高い場合は、上限側の交点）。事後サンプルごとに求め、中央値と区間を返す。
+    """
+    p = subsample(fit.posterior, n_draws)
+    lo_q, hi_q = interval_bounds()
+    rows = []
+    for i, ch in enumerate(md.channel_names):
+        scale = md.spend_scale[i]
+        actual_max = float(md.spend[:, i].max())
+        grid = np.linspace(actual_max * max_ratio / n_grid, actual_max * max_ratio, n_grid)
+        D = len(p["beta"])
+        f = hill_np(np.broadcast_to((grid / scale)[None, :, None], (D, n_grid, 1)),
+                    p["K"][:, i:i + 1], p["S"][:, i:i + 1])[:, :, 0] * p["beta"][:, i:i + 1] * md.y_scale
+        cpa = grid[None, :] / np.maximum(f, 1e-300)  # (D, n_grid)
+        for c in thresholds:
+            ok = cpa <= c
+            last = np.where(ok.any(axis=1), n_grid - 1 - np.argmax(ok[:, ::-1], axis=1), -1)
+            # どの出稿額でも平均 CPA がしきい値より高い → 上限 0（その CPA では獲得できない）
+            x = np.where(last < 0, 0.0, grid[np.clip(last, 0, None)])
+            x = np.where(ok[:, -1], np.inf, x)  # 範囲の端でもまだしきい値以下
+            rows.append({
+                "channel": ch, "cpa": float(c),
+                "spend_at_cpa": float(np.quantile(x, 0.5, method="inverted_cdf")),
+                "spend_at_cpa_lo": float(np.quantile(x, lo_q, method="inverted_cdf")),
+                "spend_at_cpa_hi": float(np.quantile(x, hi_q, method="inverted_cdf")),
+                "prob_never_reached": float((last < 0).mean()),
+                "max_weekly_spend": actual_max,
+            })
+    return pd.DataFrame(rows)
+
+
 def _hill_marginal(u: np.ndarray, K: np.ndarray, S: np.ndarray) -> np.ndarray:
     """Hill 関数の傾き d/du [u^S / (u^S + K^S)]。"""
     us, ks = np.power(u, S), np.power(K, S)

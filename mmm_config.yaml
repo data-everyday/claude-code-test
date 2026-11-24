@@ -113,6 +113,10 @@ scenarios:
 response_curve:
   max_multiplier: 2.0
 
+report:
+  # 週次飽和曲線に引く「平均 CPA（週次出稿額 ÷ その出稿で得た KPI）」の線（円）。[] で引かない
+  cpa_lines: [30000, 50000, 100000, 150000]
+
 output:
   dir: mmm_output
   interval: 0.95                  # 信用区間の幅（0.95 = 95%。0.9 / 0.8 なども可）

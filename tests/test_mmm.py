@@ -425,3 +425,21 @@ def test_saturation_levels_formula(tmp_path):
     x75 = K * 3 ** (1 / S)
     assert hill_np(np.array([[x75]]), np.array([K]), np.array([S]))[0, 0] == pytest.approx(0.75)
     assert "saturation_now" not in sl.columns
+
+
+def test_cpa_levels(tmp_path):
+    from mmm.analysis import cpa_levels
+
+    cfg = load_config(_write_cfg(tmp_path))
+    assert cfg.cpa_lines == [30000, 50000, 100000, 150000]  # 既定
+    df = pd.read_csv(tmp_path / "d.csv")
+    md = build_model_data(validate_dataframe(df, cfg), cfg)
+    mmm = BayesianMMM(cfg, md)
+    fit = mmm.fit()
+    # このデータの CPA は 0.数〜数 程度なので、しきい値を小さめに
+    cl = cpa_levels(md, mmm, fit, [0.01, 0.5, 1.0, 5.0])
+    for ch, g in cl.groupby("channel"):
+        x = g.sort_values("cpa")["spend_at_cpa"].replace(np.inf, 1e18).to_numpy()
+        assert np.all(np.diff(x) >= 0)  # 許容 CPA が高いほど出稿上限は大きい
+    assert (cl.loc[cl["cpa"] == 0.01, "spend_at_cpa"] == 0).all()  # 低すぎる CPA には届かない
+    assert load_config(_write_cfg(tmp_path), {"report.cpa_lines": []}).cpa_lines == []

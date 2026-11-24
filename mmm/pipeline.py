@@ -59,6 +59,7 @@ def run(cfg: Config) -> dict:
     opt_line = (analysis.optimal_weekly_spend(md, mmm, fit, cfg.economics)
                 if cfg.economics else None)
     sat_levels = analysis.saturation_levels(md, mmm, fit)
+    cpa_df = analysis.cpa_levels(md, mmm, fit, cfg.cpa_lines) if cfg.cpa_lines else None
     wk_curve, wk_points = analysis.weekly_saturation(md, mmm, fit, optimal=opt_line,
                                                      sat_levels=sat_levels)
     base = analysis.baseline_components(md, fit)
@@ -84,6 +85,8 @@ def run(cfg: Config) -> dict:
     wk_curve.to_csv(out / "weekly_saturation_curve.csv", index=False)
     wk_points.to_csv(out / "weekly_saturation_points.csv", index=False)
     sat_levels.to_csv(out / "saturation_levels.csv", index=False)
+    if cpa_df is not None:
+        cpa_df.to_csv(out / "cpa_levels.csv", index=False)
     if opt_line is not None:
         opt_line.to_csv(out / "optimal_weekly_spend.csv", index=False)
     decay.to_csv(out / "adstock_decay.csv", index=False)
@@ -106,7 +109,7 @@ def run(cfg: Config) -> dict:
                  changepoint_dates=cp_dates, weekly_curve=wk_curve,
                  weekly_points=wk_points, prior_share=prior_share,
                  optimal_line=opt_line, events=events_df,
-                 sat_levels=sat_levels)
+                 sat_levels=sat_levels, cpa_levels=cpa_df)
     log.info("レポート出力: %s", report_path)
 
     if cfg.output_bq.get("enabled"):
