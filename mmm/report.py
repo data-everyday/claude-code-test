@@ -116,7 +116,6 @@ def fig_baseline(base: pd.DataFrame, cp_dates: list) -> str:
     return _img(fig)
 
 
-ZONE_COLORS = ("#e3f2e1", "#fdf3d6", "#fbe3e0")  # 増額余地 / 適正 / 飽和気味
 NAVY = "#1b2a4a"  # 出稿（spend）を表す色
 LIGHT_BLUE = "#7cc4f0"  # 貢献（contribution）を表す色
 
@@ -286,12 +285,6 @@ def fig_weekly_saturation(curve: pd.DataFrame, points: pd.DataFrame, chans: list
         if srow is not None:
             x25, x50, x75 = srow["spend_at_25"], srow["spend_at_50"], srow["spend_at_75"]
             right = float(c["effective_spend"].max())
-            for a, b, col, lab in ((0, x50, ZONE_COLORS[0], "room to grow (<50% of max)"),
-                                   (x50, x75, ZONE_COLORS[1], "efficient (50-75%)"),
-                                   (x75, right, ZONE_COLORS[2], "saturating (>75%)")):
-                if a < right:
-                    ax.axvspan(a, min(b, right), color=col, alpha=0.5, lw=0, zorder=0,
-                               label=lab if i == 0 else None)
             ytop = ax.get_ylim()[1]
             for xv, lab in ((x25, "25%"), (x50, "50%"), (x75, "75%")):
                 if xv <= right:
@@ -308,7 +301,7 @@ def fig_weekly_saturation(curve: pd.DataFrame, points: pd.DataFrame, chans: list
         ax.spines[["top", "right"]].set_visible(False)
     for j in range(n, rows * cols):
         axes[j // cols][j % cols].axis("off")
-    if (optimal is not None and v) or sat is not None:
+    if optimal is not None and v:
         fig.legend(loc="lower center", ncol=3, fontsize=8, frameon=False, bbox_to_anchor=(0.5, -0.02))
         fig.tight_layout(rect=(0, 0.07, 1, 1))
     else:
@@ -569,8 +562,8 @@ def build_report(path, *, cfg, summ, dec, pred, metrics, curves, decay, diagnost
         sat_html = (
             '<h3>飽和度の目安（最大効果の 25% / 50% / 75% に達する週次出稿額）</h3><p class="muted">'
             '「最大効果」は、出稿を増やし続けたときに曲線が行き着く上限（1 週あたり）です。'
-            'グラフの点線が各割合に達する週次出稿額、背景色は 緑 = 増額の余地あり（50% 未満）、'
-            '黄 = 適正域（50〜75%）、赤 = 飽和気味（75% 以上）。タイトルの「now ○%」は現在の平均週次出稿額での飽和度です。'
+            'グラフの点線（25% / 50% / 75%）が各割合に達する週次出稿額、タイトルの「now ○%」は現在の平均週次出稿額での飽和度です。'
+            '表の「ゾーン」は目安で、50% 未満 = 増額の余地あり、50〜75% = 適正域、75% 以上 = 飽和気味。'
             '上限は外挿した値のため、実績の最大出稿額を超える到達額（※実績の範囲外）は不確実で、区間も広くなります。'
             '出稿する週・しない週がある媒体は、「出稿週の平均」と見比べてください。</p>'
             + f'<div class="scroll">{_table(sv, {"現在の平均週次出稿額": smart_num, "出稿週の平均": smart_num, "出稿週の平均での飽和度": "{:.0%}", "実績の最大週次出稿額": smart_num})}</div>')
