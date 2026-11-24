@@ -98,7 +98,8 @@ def build_config(*, csv_path: str, date_column: str, target_column: str, channel
                  budget_upper: float = 1.3, total_budget: float = 0,
                  output_dir: str = "mmm_output", interval: float = 0.95,
                  value_per_kpi: float = 0, gross_margin: float = 1.0,
-                 cpa_lines: list[float] | None = None, **old_kwargs) -> dict:
+                 cpa_lines: list[float] | None = None, cpa_lines_auto: bool = True,
+                 cpa_lines_per_channel: str = "", **old_kwargs) -> dict:
     """フォーム値 → mmm_config.yaml と同じ構造の dict。CSV の列も検証する。"""
     if old_kwargs:
         raise ValueError(
@@ -143,7 +144,10 @@ def build_config(*, csv_path: str, date_column: str, target_column: str, channel
                          "lower_bound": float(budget_lower), "upper_bound": float(budget_upper)},
         "output": {"dir": output_dir, "interval": float(interval)},
         "report": {"cpa_lines": [30000, 50000, 100000, 150000] if cpa_lines is None
-                   else [float(x) for x in cpa_lines]},
+                   else [float(x) for x in cpa_lines],
+                   "cpa_lines_auto": bool(cpa_lines_auto),
+                   "cpa_lines_per_channel": {e["name"]: [float(x) for x in e["periods"]]
+                                             for e in parse_custom_events(cpa_lines_per_channel)}},
         "economics": ({"value_per_kpi": float(value_per_kpi), "gross_margin": float(gross_margin)}
                       if value_per_kpi and value_per_kpi > 0 else None),
     }

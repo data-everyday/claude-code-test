@@ -59,7 +59,9 @@ def run(cfg: Config) -> dict:
     opt_line = (analysis.optimal_weekly_spend(md, mmm, fit, cfg.economics)
                 if cfg.economics else None)
     sat_levels = analysis.saturation_levels(md, mmm, fit)
-    cpa_df = analysis.cpa_levels(md, mmm, fit, cfg.cpa_lines) if cfg.cpa_lines else None
+    cpa_df = (analysis.cpa_levels(md, mmm, fit, cfg.cpa_lines, cfg.cpa_lines_per_channel,
+                                  auto=cfg.cpa_lines_auto)
+              if (cfg.cpa_lines or cfg.cpa_lines_per_channel or cfg.cpa_lines_auto) else None)
     wk_curve, wk_points = analysis.weekly_saturation(md, mmm, fit, optimal=opt_line,
                                                      sat_levels=sat_levels)
     base = analysis.baseline_components(md, fit)

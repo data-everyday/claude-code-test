@@ -593,16 +593,18 @@ def build_report(path, *, cfg, summ, dec, pred, metrics, curves, decay, diagnost
             out = f"{smart_num(v)}（{smart_num(r['spend_at_cpa_lo'])}〜{hi}）"
             return out + (" ※実績の範囲外" if v > r["max_weekly_spend"] else "")
 
-        cv = cpa_levels.assign(txt=cpa_levels.apply(_cpa_txt, axis=1))
-        cv = cv.pivot(index="channel", columns="cpa", values="txt")
-        cv = cv.reindex(index=channels)
-        cv.columns = [f"平均CPA {c / 1e4:g}万円" if c >= 1e4 else f"平均CPA {c:,.0f}円" for c in cv.columns]
-        cv = cv.reset_index().rename(columns={"channel": "チャネル"})
+        cv = pd.DataFrame({
+            "チャネル": cpa_levels["channel"],
+            "平均 CPA": [f"{c / 1e4:g}万円" if c >= 1e4 else f"{c:,.0f}円" for c in cpa_levels["cpa"]],
+            "線の決め方": cpa_levels["source"],
+            "その CPA に達する週次出稿額（区間）": cpa_levels.apply(_cpa_txt, axis=1),
+            "グラフ内の表記": [f"CPA {_short_money(c)}" for c in cpa_levels["cpa"]],
+        })
         cpa_html = (
-            f'<h3>平均 CPA ラインの週次出稿額</h3><p class="muted">「その週の出稿額 ÷ その出稿で得た{K}（持ち越し込み）」'
-            '＝ 平均 CPA が各金額に達する週次出稿額です。出稿を増やすほど飽和で平均 CPA は上がるので、'
-            '「この額までなら 1 あたり平均 ○円以内で獲得できる」上限の目安になります。グラフの茶色の点線（ラベル CPA ○k、k = 千円）で表示し、'
-            'グラフの範囲外の線は描いていません。毎週同じ額を出稿し続ける前提の値です。</p>'
+            '<h3>平均 CPA ラインの週次出稿額</h3><p class="muted">線の決め方：共通 = 全媒体共通の金額'
+            '（report.cpa_lines）、自動 = 共通の金額では線が 2 本未満になるため、その媒体の CPA の水準から自動で選んだ金額、'
+            '指定 = report.cpa_lines_per_channel で媒体ごとに指定した金額。'
+            '「届かない」= どの出稿額でも平均 CPA がその金額より高い。</p>'
             f'<div class="scroll">{_table(cv)}</div>')
 
     weekly_html = ""
@@ -621,8 +623,19 @@ def build_report(path, *, cfg, summ, dec, pred, metrics, curves, decay, diagnost
                           'gross_margin を指定すると表示されます。</div>')
                        + fig_weekly_saturation(weekly_curve, weekly_points, channels,
                                                optimal_line, cfg.economics, xcol="spend",
-                                               sat=sat_levels, cpa=cpa_levels)
-                       + sat_html + cpa_html)
+                                               sat=sat_levels)
+                       + sat_html)
+        if cpa_levels is not None and len(cpa_levels):
+            weekly_html += (
+                f'<h2>週次の飽和曲線と平均 CPA ライン（横軸＝その週の出稿額）</h2><p class="muted">'
+                f'上と同じ飽和曲線に、平均 CPA（その週の出稿額 ÷ その出稿で得た{K}、持ち越し込み）が各金額に達する'
+                '週次出稿額の線（茶色の点線、ラベル CPA ○k、k = 千円）を引いています。'
+                '出稿を増やすほど飽和で平均 CPA は上がるので、各線は「この額までなら 1 あたり平均 ○円以内で獲得できる」上限の目安です。'
+                '全媒体共通の金額が 2 本未満しか引けない媒体は、その媒体の CPA の水準に合わせた金額を自動で選んでいます（表の「線の決め方」）。'
+                'グラフの範囲外の線は描いていません。毎週同じ額を出稿し続ける前提の値です。</p>'
+                + fig_weekly_saturation(weekly_curve, weekly_points, channels, None, None,
+                                        xcol="spend", cpa=cpa_levels)
+                + cpa_html)
         weekly_html += ('<h2>週次の飽和曲線と実績（横軸＝adstock 後の出稿額）</h2><p class="muted">横軸 = その週に効いている出稿額'
                        '（adstock 適用後。過去の出稿の持ち越しを含み、単位は出稿額と同じ）、縦軸 = その週の貢献。'
                        f'線は推定した飽和曲線（帯は {IL} 区間）、〇は実績の各週。〇が曲線の平らな部分に多いほど、'

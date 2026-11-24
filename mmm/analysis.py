@@ -307,15 +307,36 @@ def saturation_levels(md: ModelData, mmm: BayesianMMM, fit: FitResult,
     return pd.DataFrame(rows)
 
 
+def _nice_values(lo: float, hi: float, n: int = 4) -> list[float]:
+    """lo〜hi の範囲から、きりのよい金額（1, 1.2, 1.5, 2, 2.5, 3, … 9 × 10^k）を n 個選ぶ。"""
+    if not (np.isfinite(lo) and np.isfinite(hi)) or hi <= lo or lo <= 0:
+        return []
+    mant = np.array([1, 1.2, 1.5, 2, 2.5, 3, 3.5, 4, 4.5, 5, 6, 7, 8, 9])
+    cands = np.unique(np.concatenate([mant * 10.0 ** k for k in range(int(np.floor(np.log10(lo))) - 1,
+                                                                       int(np.ceil(np.log10(hi))) + 1)]))
+    cands = cands[(cands >= lo) & (cands <= hi)]
+    if len(cands) <= n:
+        return [float(c) for c in cands]
+    idx = np.unique(np.round(np.linspace(0, len(cands) - 1, n)).astype(int))
+    return [float(c) for c in cands[idx]]
+
+
 def cpa_levels(md: ModelData, mmm: BayesianMMM, fit: FitResult, thresholds,
-               n_draws: int = 400, n_grid: int = 1000, max_ratio: float = 5.0) -> pd.DataFrame:
+               per_channel: dict | None = None, auto: bool = True,
+               n_draws: int = 400, n_grid: int = 1000, max_ratio: float = 5.0,
+               plot_ratio: float = 1.3) -> pd.DataFrame:
     """平均 CPA（週次出稿額 ÷ その出稿が持ち越し込みで生む KPI）が各しきい値に達する週次出稿額。
 
     飽和曲線では出稿を増やすほど平均 CPA が上がるので、「平均 CPA がしきい値以下で出稿できる上限額」を返す
     （S 字で少額側も CPA が高い場合は、上限側の交点）。事後サンプルごとに求め、中央値と区間を返す。
+
+    しきい値はチャネルごとに、per_channel の指定 → 全体の thresholds の順で使う。
+    auto=True のとき、全体の thresholds のうちグラフ範囲（実績最大 × plot_ratio）に入るものが 2 本未満の
+    チャネルは、そのチャネルの CPA の水準に合わせたきりのよい金額を自動で 4 本選ぶ。
     """
     p = subsample(fit.posterior, n_draws)
     lo_q, hi_q = interval_bounds()
+    per_channel = per_channel or {}
     rows = []
     for i, ch in enumerate(md.channel_names):
         scale = md.spend_scale[i]
@@ -325,14 +346,36 @@ def cpa_levels(md: ModelData, mmm: BayesianMMM, fit: FitResult, thresholds,
         f = hill_np(np.broadcast_to((grid / scale)[None, :, None], (D, n_grid, 1)),
                     p["K"][:, i:i + 1], p["S"][:, i:i + 1])[:, :, 0] * p["beta"][:, i:i + 1] * md.y_scale
         cpa = grid[None, :] / np.maximum(f, 1e-300)  # (D, n_grid)
-        for c in thresholds:
+
+        def spend_at(c):
             ok = cpa <= c
             last = np.where(ok.any(axis=1), n_grid - 1 - np.argmax(ok[:, ::-1], axis=1), -1)
             # どの出稿額でも平均 CPA がしきい値より高い → 上限 0（その CPA では獲得できない）
             x = np.where(last < 0, 0.0, grid[np.clip(last, 0, None)])
-            x = np.where(ok[:, -1], np.inf, x)  # 範囲の端でもまだしきい値以下
+            return np.where(ok[:, -1], np.inf, x), last  # 範囲の端でもまだしきい値以下 → inf
+
+        if ch in per_channel:
+            ths, src = list(per_channel[ch]), "指定"
+        else:
+            ths, src = list(thresholds), "共通"
+            if auto:
+                in_plot = sum(1 for c in ths
+                              if 0 < np.quantile(spend_at(c)[0], 0.5, method="inverted_cdf")
+                              <= actual_max * plot_ratio)
+                if in_plot < 2:
+                    # グラフ範囲内で、平均 CPA（事後中央値の曲線）が最小になる点からグラフ右端までの
+                    # CPA の幅から選ぶ（S 字の少額側の高い CPA は除外し、上限側の交点がグラフ内に入るように）
+                    cpa_med = np.median(cpa, axis=0)
+                    rng = np.flatnonzero(grid <= actual_max * plot_ratio)
+                    lo_c = float(cpa_med[rng].min())
+                    hi_c = float(cpa_med[rng[-1]])
+                    auto_ths = _nice_values(lo_c * 1.02, hi_c)
+                    if auto_ths:
+                        ths, src = auto_ths, "自動"
+        for c in ths:
+            x, last = spend_at(c)
             rows.append({
-                "channel": ch, "cpa": float(c),
+                "channel": ch, "cpa": float(c), "source": src,
                 "spend_at_cpa": float(np.quantile(x, 0.5, method="inverted_cdf")),
                 "spend_at_cpa_lo": float(np.quantile(x, lo_q, method="inverted_cdf")),
                 "spend_at_cpa_hi": float(np.quantile(x, hi_q, method="inverted_cdf")),

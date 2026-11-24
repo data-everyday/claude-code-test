@@ -443,3 +443,13 @@ def test_cpa_levels(tmp_path):
         assert np.all(np.diff(x) >= 0)  # 許容 CPA が高いほど出稿上限は大きい
     assert (cl.loc[cl["cpa"] == 0.01, "spend_at_cpa"] == 0).all()  # 低すぎる CPA には届かない
     assert load_config(_write_cfg(tmp_path), {"report.cpa_lines": []}).cpa_lines == []
+    # 共通の金額が届かないチャネルは自動で選ばれ、グラフ範囲内（実績最大 × 1.3）に 2 本以上入る
+    auto = cpa_levels(md, mmm, fit, [1e9], auto=True)
+    assert set(auto["source"]) == {"自動"}
+    for ch, g in auto.groupby("channel"):
+        inside = ((g["spend_at_cpa"] > 0) & (g["spend_at_cpa"] <= g["max_weekly_spend"] * 1.3)).sum()
+        assert inside >= 2, ch
+    # チャネル別指定が最優先
+    pc = cpa_levels(md, mmm, fit, [1.0], per_channel={"tv": [0.5, 2.0]})
+    assert list(pc.loc[pc["channel"] == "tv", "cpa"]) == [0.5, 2.0]
+    assert set(pc.loc[pc["channel"] == "tv", "source"]) == {"指定"}

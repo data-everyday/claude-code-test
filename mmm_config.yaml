@@ -116,6 +116,11 @@ response_curve:
 report:
   # 週次飽和曲線に引く「平均 CPA（週次出稿額 ÷ その出稿で得た KPI）」の線（円）。[] で引かない
   cpa_lines: [30000, 50000, 100000, 150000]
+  # 上の金額が 2 本未満しか引けないチャネルは、そのチャネルの CPA 水準に合わせて自動で 4 本選ぶ（false で無効）
+  cpa_lines_auto: true
+  # チャネル別に指定する場合（指定が最優先）
+  # cpa_lines_per_channel:
+  #   youtube: [300000, 500000, 800000]
 
 output:
   dir: mmm_output
