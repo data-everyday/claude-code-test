@@ -126,6 +126,11 @@ def test_end_to_end_positive_effects(tmp_path):
     assert (summ["contribution_lo"] >= 0).all()  # 広告効果は正
     assert (summ["roi_lo"] >= 0).all()
     assert set(res["holdout_metrics"]["split"]) == {"train", "test"}
+    hm = res["holdout_metrics"].set_index("split")
+    assert hm.loc["train", "n_weeks"] + hm.loc["test", "n_weeks"] == 80
+    assert hm.loc["train", "period_end"] < hm.loc["test", "period_start"]
+    html_txt = res["report"].read_text(encoding="utf-8")
+    assert "学習期間（train）" in html_txt and "テスト期間（test）" in html_txt
     opt = res["optimization"]["table"]
     assert opt["optimal_spend"].sum() == pytest.approx(opt["current_spend"].sum(), rel=1e-4)
     assert (opt["multiplier"] >= opt["lower_bound"] - 1e-9).all()

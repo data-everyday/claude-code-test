@@ -417,25 +417,49 @@ def build_report(path, *, cfg, summ, dec, pred, metrics, curves, decay, diagnost
         diag_html += f'<details><summary>パラメータ要約</summary><div class="scroll">{s.to_html(index=False, border=0, classes="tbl")}</div></details>'
 
     mfmt = {"mape": "{:.1%}", "rmse": "{:,.0f}", "r2": "{:.3f}", "coverage": "{:.0%}"}
+    def _acc_table(m: pd.DataFrame, full: bool = False) -> str:
+        names = {"train": "全期間（すべて学習に使用）" if full else "学習期間（train）",
+                 "test": "テスト期間（test）"}
+        v = pd.DataFrame({
+            "区分": [names.get(x, x) for x in m["split"]],
+            "期間": [f"{a} 〜 {b}" for a, b in zip(m["period_start"], m["period_end"])],
+            "週数": m["n_weeks"],
+            "MAPE": m["mape"], "RMSE": m["rmse"], "R²": m["r2"],
+            f"{IL}区間の的中率": m["coverage"],
+        })
+        return _table(v, {"MAPE": "{:.1%}", "RMSE": smart_num, "R²": "{:.3f}",
+                          f"{IL}区間の的中率": "{:.0%}"})
+
     holdout_html = ""
-    holdout_summary = ('<p class="muted">ホールドアウト検証は行っていません'
-                       '（validation.holdout_weeks / Colab の「ホールドアウト週数」で週数を指定すると、テスト期間の精度が出ます）。</p>')
+    holdout_summary = ('<p class="muted">学習期間とテスト期間の分割（ホールドアウト検証）は行っていません'
+                       '（validation.holdout_weeks / Colab の「ホールドアウト週数」で週数を指定すると、'
+                       '学習期間とテスト期間それぞれの精度が出ます）。</p>')
     if holdout_metrics is not None and len(holdout_metrics):
-        t = holdout_metrics[holdout_metrics["split"] == "test"]
-        if len(t):
-            t = t.iloc[0]
-            r2_note = "（テスト期間が短いと R² は不安定になり、マイナスになることもあります）"
-            holdout_summary = (
-                f'<div class="kpis"><div class="kpi"><span>テスト期間</span><b>末尾 {int(t["n_weeks"])} 週</b></div>'
-                f'<div class="kpi"><span>テスト MAPE</span><b>{t["mape"]:.1%}</b></div>'
-                f'<div class="kpi"><span>テスト RMSE</span><b>{t["rmse"]:,.0f}</b></div>'
-                f'<div class="kpi"><span>テスト R²</span><b>{t["r2"]:.3f}</b></div>'
-                f'<div class="kpi"><span>テスト {IL}区間の的中率</span><b>{t["coverage"]:.0%}</b></div></div>'
-                f'<p class="muted">学習に使っていない末尾 {int(t["n_weeks"])} 週を予測した精度{r2_note}。'
-                '下の「モデル適合」の表は全期間で再推定したモデルの学習データへの当てはまりです。</p>')
-        holdout_html = (f"<h3>ホールドアウト検証（末尾 {cfg.holdout_weeks} 週を除外して学習）</h3>"
-                        f'<div class="scroll">{_table(holdout_metrics, mfmt)}</div>'
-                        f'{fig_fit(holdout_metrics.attrs["pred"])}')
+        tr = holdout_metrics[holdout_metrics["split"] == "train"]
+        te = holdout_metrics[holdout_metrics["split"] == "test"]
+        gap = ""
+        if len(tr) and len(te):
+            r, t = tr.iloc[0], te.iloc[0]
+            ratio = t["mape"] / r["mape"] if r["mape"] else np.nan
+            if np.isfinite(ratio) and ratio > 2:
+                gap = (f'<div class="warn">テスト期間の MAPE（{t["mape"]:.1%}）が学習期間（{r["mape"]:.1%}）の '
+                       f'{ratio:.1f} 倍です。学習データに合わせすぎている（過学習）か、テスト期間に'
+                       'モデルにない変化（新施策・外部要因など）があった可能性があります。</div>')
+        holdout_summary = (
+            f'<p class="muted">データを学習期間とテスト期間（末尾 {cfg.holdout_weeks} 週）に分け、'
+            '学習期間だけでモデルを推定し、両方の期間で精度を測っています。'
+            '学習期間 = 推定に使ったデータへの当てはまり、テスト期間 = 推定に使っていない週の予測精度（未知の週への当たり具合）。'
+            '両者の差が小さいほど、モデルが安定していると言えます。'
+            'テスト期間が短いと R² は不安定になり、マイナスになることもあるため、MAPE・RMSE を中心に見てください。</p>'
+            f'<div class="scroll">{_acc_table(holdout_metrics)}</div>{gap}'
+            f'{fig_fit(holdout_metrics.attrs["pred"])}')
+    refit = cfg.refit_full or holdout_metrics is None or not len(holdout_metrics)
+    fit_title = "モデル適合（全期間で推定したモデル）" if refit else "モデル適合（学習期間で推定したモデル）"
+    full_fit_html = (
+        ('<p class="muted">分析結果（貢献度・ROI・最適化など）は、全期間のデータで推定したモデルを使っています。'
+         'その当てはまりです（全期間を学習に使っているため、テスト期間の行はありません）。</p>' if refit else
+         '<p class="muted">validation.refit_full: false のため、分析結果は学習期間で推定したモデルを使っています。</p>')
+        + f'<div class="scroll">{_acc_table(metrics, full=refit)}</div>')
 
     sfmt = {"spend": "{:,.0f}", "contribution_mean": "{:,.0f}", "contribution_lo": "{:,.0f}",
             "contribution_hi": "{:,.0f}", "contribution_share": "{:.1%}", "spend_share": "{:.1%}",
@@ -639,13 +663,12 @@ KPI（目的変数）{K}（列名 {html.escape(cfg.target_column)}）／ チャ�
 
 <h2>収束診断</h2>{diag_html}
 
-<h2>予測精度（テスト期間）</h2>
+<h2>予測精度（学習期間・テスト期間）</h2>
 {holdout_summary}
 
-<h2>モデル適合</h2>
-<div class="scroll">{_table(metrics, mfmt)}</div>
+<h2>{fit_title}</h2>
+{full_fit_html}
 {fig_fit(pred)}
-{holdout_html}
 
 <h2>貢献度分解</h2>
 {fig_decomp(dec, channels)}

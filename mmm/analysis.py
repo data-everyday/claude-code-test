@@ -415,8 +415,11 @@ def fit_metrics(md: ModelData, fit: FitResult, seed: int = 0) -> pd.DataFrame:
         nz = y != 0
         ss_res = ((y - yh) ** 2).sum()
         ss_tot = ((y - y.mean()) ** 2).sum()
+        d = md.dates[mask]
         rows.append({
             "split": label,
+            "period_start": pd.Timestamp(d.min()).date(),
+            "period_end": pd.Timestamp(d.max()).date(),
             "n_weeks": int(mask.sum()),
             "mape": float(np.mean(np.abs((y[nz] - yh[nz]) / y[nz]))) if nz.any() else np.nan,
             "rmse": float(np.sqrt(np.mean((y - yh) ** 2))),
