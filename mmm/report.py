@@ -290,9 +290,7 @@ def fig_weekly_saturation(curve: pd.DataFrame, points: pd.DataFrame, chans: list
                 if xv <= right:
                     ax.axvline(xv, color="#6b7280", ls=(0, (4, 3)), lw=0.8, zorder=1)
                     ax.text(xv, ytop * 0.98, f" {lab}", fontsize=7, color="#374151", va="top")
-            ax.set_title(f"{ch}  (now {srow['saturation_now']:.0%} of max)", fontsize=10)
-        else:
-            ax.set_title(ch, fontsize=10)
+        ax.set_title(ch, fontsize=10)
         ax.set_xlabel("weekly effective spend (after adstock)" if xcol == "effective_spend"
                       else "weekly spend", fontsize=8)
         ax.set_ylabel("weekly contribution" if xcol == "effective_spend"
@@ -547,26 +545,17 @@ def build_report(path, *, cfg, summ, dec, pred, metrics, curves, decay, diagnost
             return out + (" ※実績の範囲外" if v > r["max_weekly_spend"] else "")
         sv = pd.DataFrame({
             "チャネル": sat_levels["channel"],
-            "現在の平均週次出稿額": sat_levels["current_weekly_spend"],
-            "出稿週の平均": sat_levels["current_on_air_weekly_spend"],
-            "出稿週の平均での飽和度": sat_levels["saturation_on_air"],
-            "現在の飽和度": [f"{a:.0%}（{b:.0%}〜{c:.0%}）" for a, b, c in
-                       zip(sat_levels["saturation_now"], sat_levels["saturation_now_lo"],
-                           sat_levels["saturation_now_hi"])],
             "最大効果の 25% に達する額": sat_levels.apply(lambda r: _rng(r, "25"), axis=1),
             "50%（半飽和点）": sat_levels.apply(lambda r: _rng(r, "50"), axis=1),
             "75%": sat_levels.apply(lambda r: _rng(r, "75"), axis=1),
             "実績の最大週次出稿額": sat_levels["max_weekly_spend"],
-            "ゾーン": sat_levels["zone"],
         })
         sat_html = (
             '<h3>飽和度の目安（最大効果の 25% / 50% / 75% に達する週次出稿額）</h3><p class="muted">'
             '「最大効果」は、出稿を増やし続けたときに曲線が行き着く上限（1 週あたり）です。'
-            'グラフの点線（25% / 50% / 75%）が各割合に達する週次出稿額、タイトルの「now ○%」は現在の平均週次出稿額での飽和度です。'
-            '表の「ゾーン」は目安で、50% 未満 = 増額の余地あり、50〜75% = 適正域、75% 以上 = 飽和気味。'
-            '上限は外挿した値のため、実績の最大出稿額を超える到達額（※実績の範囲外）は不確実で、区間も広くなります。'
-            '出稿する週・しない週がある媒体は、「出稿週の平均」と見比べてください。</p>'
-            + f'<div class="scroll">{_table(sv, {"現在の平均週次出稿額": smart_num, "出稿週の平均": smart_num, "出稿週の平均での飽和度": "{:.0%}", "実績の最大週次出稿額": smart_num})}</div>')
+            'グラフの点線（25% / 50% / 75%）が各割合に達する週次出稿額です。'
+            '上限は外挿した値のため、実績の最大出稿額を超える到達額（※実績の範囲外）は不確実で、区間も広くなります。</p>'
+            + f'<div class="scroll">{_table(sv, {"実績の最大週次出稿額": smart_num})}</div>')
 
     weekly_html = ""
     if weekly_curve is not None and weekly_points is not None:

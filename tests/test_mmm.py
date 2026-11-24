@@ -424,5 +424,4 @@ def test_saturation_levels_formula(tmp_path):
     K, S = np.median(fit.posterior["K"][:, i]), np.median(fit.posterior["S"][:, i])
     x75 = K * 3 ** (1 / S)
     assert hill_np(np.array([[x75]]), np.array([K]), np.array([S]))[0, 0] == pytest.approx(0.75)
-    assert set(sl["zone"]).issubset({"増額の余地あり（飽和度 50% 未満）", "適正域（飽和度 50〜75%）",
-                                     "飽和気味（飽和度 75% 以上）"})
+    assert "saturation_now" not in sl.columns
