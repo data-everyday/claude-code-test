@@ -9,7 +9,7 @@ from . import analysis
 from .config import Config
 from .data import build_model_data, load_dataframe
 from .model import BayesianMMM
-from .optimize import optimize_budget
+from .optimize import minimize_spend, optimize_budget
 from .report import build_report
 from .scenario import run_scenarios
 
@@ -73,8 +73,11 @@ def run(cfg: Config) -> dict:
     cp_dates = list(md.dates.iloc[md.changepoint_index]) if len(md.changepoint_index) else []
 
     opt = None
+    opt_min = None
     if cfg.optimization.get("enabled", True):
         opt = optimize_budget(md, mmm, fit, cfg.optimization)
+        if cfg.optimization.get("minimize_spend", True):
+            opt_min = minimize_spend(md, mmm, fit, cfg.optimization)
 
     scen = run_scenarios(md, mmm, fit.posterior, cfg.scenarios,
                          int(cfg.optimization.get("period_weeks") or T))
@@ -106,6 +109,8 @@ def run(cfg: Config) -> dict:
         ctl_weekly.to_csv(out / "control_contributions_weekly.csv", index=False)
     if opt:
         opt["table"].to_csv(out / "budget_optimization.csv", index=False)
+    if opt_min:
+        opt_min["table"].to_csv(out / "budget_minimization.csv", index=False)
     if fit.diagnostics.get("summary") is not None:
         fit.diagnostics["summary"].to_csv(out / "posterior_summary.csv")
     try:
@@ -121,7 +126,8 @@ def run(cfg: Config) -> dict:
                  weekly_points=wk_points, prior_share=prior_share,
                  optimal_line=opt_line, events=events_df,
                  sat_levels=sat_levels, cpa_levels=cpa_df,
-                 controls=(ctl_sum, ctl_weekly), settings=settings, params=params_df)
+                 controls=(ctl_sum, ctl_weekly), settings=settings, params=params_df,
+                 opt_min=opt_min)
     log.info("レポート出力: %s", report_path)
 
     if cfg.output_bq.get("enabled"):
@@ -131,10 +137,12 @@ def run(cfg: Config) -> dict:
                   "response_curves": curves}
         if opt:
             tables["budget_optimization"] = opt["table"]
+        if opt_min:
+            tables["budget_minimization"] = opt_min["table"]
         if len(scen):
             tables["scenarios"] = scen
         write_tables(tables, cfg.output_bq, (cfg.raw.get("gcp") or {}).get("project_id"))
 
-    return {"summary": summ, "decomposition": dec, "metrics": metrics, "optimization": opt,
+    return {"summary": summ, "decomposition": dec, "metrics": metrics, "optimization": opt, "minimization": opt_min,
             "holdout_metrics": holdout_metrics, "scenarios": scen, "diagnostics": fit.diagnostics,
             "report": report_path}

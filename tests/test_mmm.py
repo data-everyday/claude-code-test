@@ -558,3 +558,22 @@ def test_lines_consistent_with_plotted_curve(tmp_path):
             assert np.interp(x50, c["effective_spend"], c["contribution_mean"]) / top == pytest.approx(0.5, abs=0.02)
     ol = optimal_weekly_spend(md, mmm, fit, {"value_per_kpi": 1.0, "gross_margin": 1.0})
     assert (ol["optimal_weekly_spend"] >= 0).all()
+
+
+def test_minimize_spend(tmp_path):
+    from mmm.optimize import minimize_spend
+
+    cfg = load_config(_write_cfg(tmp_path))
+    df = pd.read_csv(tmp_path / "d.csv")
+    md = build_model_data(validate_dataframe(df, cfg), cfg)
+    mmm = BayesianMMM(cfg, md)
+    fit = mmm.fit()
+    r = minimize_spend(md, mmm, fit, cfg.optimization)
+    t = r["table"]
+    assert r["minimum_budget"] <= r["current_budget"] + 1e-6
+    assert r["optimal_total_contribution"] >= r["current_total_contribution"] * (1 - 1e-3)  # KPI を維持
+    assert (t["multiplier"] >= t["lower_bound"] - 1e-9).all() and (t["multiplier"] <= t["upper_bound"] + 1e-9).all()
+    # 目標を下げれば、予算はさらに減らせる（同じか少ない）
+    r90 = minimize_spend(md, mmm, fit, {**cfg.optimization, "kpi_target_ratio": 0.9})
+    assert r90["minimum_budget"] <= r["minimum_budget"] + 1e-6
+    assert r90["optimal_total_contribution"] >= r90["current_total_contribution"] * 0.9 * (1 - 1e-3)

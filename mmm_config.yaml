@@ -98,6 +98,10 @@ validation:
 
 optimization:
   enabled: true
+  # ① 予算を変えずに KPI を最大化（常に実行）
+  # ② KPI を変えずに予算を最小化（minimize_spend: false で省略）
+  minimize_spend: true
+  kpi_target_ratio: 1.0           # ② の目標 = 現状の広告による増分 × この値（1.0 = 現状維持）
   period_weeks: 52                # 直近何週の予算を最適化するか
   total_budget: null              # null = 対象期間の実績総額
   lower_bound: 0.7                # 現状比の下限倍率（全チャネル共通）

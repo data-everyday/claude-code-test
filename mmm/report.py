@@ -452,7 +452,8 @@ def build_report(path, *, cfg, summ, dec, pred, metrics, curves, decay, diagnost
                  cpa_levels: pd.DataFrame | None = None,
                  controls: tuple | None = None,
                  settings: dict | None = None,
-                 params: pd.DataFrame | None = None) -> None:
+                 params: pd.DataFrame | None = None,
+                 opt_min: dict | None = None) -> None:
     IL = interval_label()
     prior_html = ""
     if prior_share:
@@ -651,10 +652,10 @@ def build_report(path, *, cfg, summ, dec, pred, metrics, curves, decay, diagnost
                 "current_contribution": "{:,.0f}", "optimal_contribution": "{:,.0f}",
                 "spend_change_pct": "{:+.1f}%"}
         opt_html = f"""
-<h2>予算最適化</h2>
+<h2>予算最適化①：予算を変えずに{K}を最大化</h2>
 <p class="muted">対象期間 {opt['period_start']:%Y-%m-%d} 〜 {opt['period_end']:%Y-%m-%d}（{opt['period_weeks']} 週）、
-総予算 {opt['budget']:,.0f}。各チャネルは実績の週次パターンを維持したまま倍率を調整（上下限内）。
-期間外へ持ち越す adstock 効果は含みません。</p>
+総予算 {opt['budget']:,.0f}（変えない）。各チャネルは実績の週次パターンを維持したまま倍率を調整（上下限内）し、
+広告による増分{K}が最大になる配分を求めます。期間外へ持ち越す adstock 効果は含みません。</p>
 <div class="kpis">
 <div class="kpi"><span>現状の広告貢献</span><b>{opt['current_total_contribution']:,.0f}</b></div>
 <div class="kpi"><span>最適配分の広告貢献</span><b>{opt['optimal_total_contribution']:,.0f}</b></div>
@@ -664,6 +665,31 @@ def build_report(path, *, cfg, summ, dec, pred, metrics, curves, decay, diagnost
 {'' if opt['success'] else '<div class="warn">⚠ 最適化ソルバーが収束しませんでした。結果は参考値です</div>'}
 <div class="scroll">{_table(opt['table'], ofmt)}</div>
 {fig_opt(opt['table'])}
+"""
+    if opt and opt_min:
+        m = opt_min
+        tgt = "現状と同じ" if abs(m["target_ratio"] - 1) < 1e-9 else f"現状の {m['target_ratio']:.0%}"
+        warn = ""
+        if not m["feasible"]:
+            warn = ('<div class="warn">⚠ 上限まで出稿しても目標の増分に届かないため、上限まで出稿した場合の結果です。'
+                    '目標（kpi_target_ratio）か上限倍率を見直してください。</div>')
+        elif not m["success"]:
+            warn = '<div class="warn">⚠ 最適化ソルバーが収束しませんでした。結果は参考値です</div>'
+        opt_html += f"""
+<h2>予算最適化②：{K}を変えずに予算を最小化</h2>
+<p class="muted">①と同じ対象期間・同じ上下限の中で、広告による増分{K}（期待値）を{tgt}水準に保ったまま、
+総予算が最小になる配分を求めます。効率の悪いチャネル（限界的な効果が小さいチャネル）から減らし、
+必要なら効率のよいチャネルを増やして増分を保ちます。「増分が現状以上になる確率」は、推定の不確かさを考えたときに
+増分が目標を下回らない確率で、50% 前後なのは期待値をちょうど目標に合わせているためです。</p>
+<div class="kpis">
+<div class="kpi"><span>現状の予算（対象期間）</span><b>{jp_num(m['current_budget'])}</b><span>{m['current_budget']:,.0f}</span></div>
+<div class="kpi"><span>最小の予算</span><b>{jp_num(m['minimum_budget'])}</b><span>{m['minimum_budget']:,.0f}</span></div>
+<div class="kpi"><span>削減できる予算</span><b>{jp_num(m['saving'])}（{m['saving_pct']:.1%}）</b><span>{m['saving']:,.0f}</span></div>
+<div class="kpi"><span>増分{K}の変化（{IL}区間）</span><b>{m['kpi_change_mean']:+,.0f}</b><span>[{m['kpi_change_lo']:+,.0f}, {m['kpi_change_hi']:+,.0f}]／目標以上の確率 {m['prob_kpi_not_lower']:.0%}</span></div>
+</div>
+{warn}
+<div class="scroll">{_table(m['table'], ofmt)}</div>
+{fig_opt(m['table'])}
 """
 
     base_html = ""

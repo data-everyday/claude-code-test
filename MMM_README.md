@@ -14,7 +14,7 @@
 | コントロール | トレンド（`linear` / 変化点付き `changepoint` / `none`）・フーリエ季節性・任意の列（価格・プロモ等。符号制約 `positive`/`negative`/`free`） |
 | 事前知識 | ROI 事前は「広告貢献シェアの想定(既定20%)」から KPI の単位に合わせて自動設定。リフト試験等の ROI を `roi_prior: {median, sd}` で投入可能 |
 | 検証 | 収束診断（R-hat・ESS・divergence を警告）、末尾 N 週（既定 6 週）のホールドアウト検証。テスト期間の MAPE/RMSE/R²/区間的中率をレポート上部に表示 |
-| 最適化 | 総予算固定＋チャネル別上下限（現状比倍率）で期待貢献を最大化 |
+| 最適化 | ① 総予算固定で期待貢献（KPI）を最大化、② KPI を現状水準に保ったまま総予算を最小化（いずれもチャネル別上下限＝現状比倍率の範囲内） |
 | シナリオ | 「TV を 1.5 倍」「検索を 30,000 に」等の試算。保存済み推定結果から再推定なしでも実行可 |
 | 入出力 | CSV / BigQuery から読込、CSV・HTML 出力、BigQuery への書き戻し |
 
@@ -261,7 +261,8 @@ economics:
 | `weekly_saturation_curve.csv` / `weekly_saturation_points.csv` | 週次の飽和曲線と実績各週の点（adstock 後の出稿額 → 週の貢献） |
 | `adstock_decay.csv` | ラグ別 adstock 重み |
 | `baseline_components.csv` | ベースラインの内訳（切片+トレンド・季節性・コントロール） |
-| `budget_optimization.csv` | 最適予算配分 |
+| `budget_optimization.csv` | ① 予算を変えずに KPI を最大化する配分 |
+| `budget_minimization.csv` | ② KPI を変えずに予算を最小化する配分 |
 | `scenarios.csv` | シナリオ試算結果 |
 | `posterior_summary.csv` / `posterior.nc` | 事後分布の要約・全サンプル |
 
@@ -289,6 +290,9 @@ python -m mmm simulate --config mmm_config.yaml --scenario-file my_scenarios.yam
 データや設定（週数・チャネル）を変えた場合は `run` で再推定してください。
 
 ## 予算最適化の前提
+
+- ① 予算を変えずに KPI を最大化：総額 = `total_budget`（null なら実績額）で、期待貢献が最大の配分
+- ② KPI を変えずに予算を最小化（`minimize_spend: true`）：期待貢献 ≥ 現状 × `kpi_target_ratio`（既定 1.0）で、総予算が最小の配分
 
 - 直近 `period_weeks` 週の各チャネルの週次パターンを維持し、チャネル別倍率を調整
 - 総額 = `total_budget`（null なら実績額）、倍率は `lower_bound`〜`upper_bound`（`channel_bounds` で個別上書き）

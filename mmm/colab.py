@@ -100,7 +100,8 @@ def build_config(*, csv_path: str, date_column: str, target_column: str, channel
                  value_per_kpi: float = 0, gross_margin: float = 1.0,
                  cpa_lines: list[float] | None = None, cpa_lines_auto: bool = True,
                  cpa_lines_per_channel: str = "", saturation_default: str = "auto",
-                 saturation_per_channel: str = "", **old_kwargs) -> dict:
+                 saturation_per_channel: str = "", minimize_spend: bool = True,
+                 kpi_target_ratio: float = 1.0, **old_kwargs) -> dict:
     """フォーム値 → mmm_config.yaml と同じ構造の dict。CSV の列も検証する。"""
     if old_kwargs:
         raise ValueError(
@@ -163,7 +164,9 @@ def build_config(*, csv_path: str, date_column: str, target_column: str, channel
         "validation": {"holdout_weeks": int(holdout_weeks), "refit_full": True},
         "optimization": {"enabled": True, "period_weeks": int(opt_period_weeks),
                          "total_budget": float(total_budget) if total_budget else None,
-                         "lower_bound": float(budget_lower), "upper_bound": float(budget_upper)},
+                         "lower_bound": float(budget_lower), "upper_bound": float(budget_upper),
+                         "minimize_spend": bool(minimize_spend),
+                         "kpi_target_ratio": float(kpi_target_ratio)},
         "output": {"dir": output_dir, "interval": float(interval)},
         "report": {"cpa_lines": [30000, 50000, 100000, 150000] if cpa_lines is None
                    else [float(x) for x in cpa_lines],
