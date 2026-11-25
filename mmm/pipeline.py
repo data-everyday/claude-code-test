@@ -67,6 +67,7 @@ def run(cfg: Config) -> dict:
     base = analysis.baseline_components(md, fit)
     prior_share = analysis.prior_media_share(md, mmm)
     events_df = analysis.event_effects(md, fit, cfg)
+    ctl_sum, ctl_weekly = analysis.control_contributions(md, fit)
     cp_dates = list(md.dates.iloc[md.changepoint_index]) if len(md.changepoint_index) else []
 
     opt = None
@@ -95,6 +96,9 @@ def run(cfg: Config) -> dict:
     base.to_csv(out / "baseline_components.csv", index=False)
     if len(events_df):
         events_df.to_csv(out / "event_effects.csv", index=False)
+    if len(ctl_sum):
+        ctl_sum.to_csv(out / "control_contributions.csv", index=False)
+        ctl_weekly.to_csv(out / "control_contributions_weekly.csv", index=False)
     if opt:
         opt["table"].to_csv(out / "budget_optimization.csv", index=False)
     if fit.diagnostics.get("summary") is not None:
@@ -111,7 +115,8 @@ def run(cfg: Config) -> dict:
                  changepoint_dates=cp_dates, weekly_curve=wk_curve,
                  weekly_points=wk_points, prior_share=prior_share,
                  optimal_line=opt_line, events=events_df,
-                 sat_levels=sat_levels, cpa_levels=cpa_df)
+                 sat_levels=sat_levels, cpa_levels=cpa_df,
+                 controls=(ctl_sum, ctl_weekly))
     log.info("レポート出力: %s", report_path)
 
     if cfg.output_bq.get("enabled"):

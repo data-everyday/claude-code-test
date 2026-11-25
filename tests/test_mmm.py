@@ -461,3 +461,24 @@ def test_cpa_levels(tmp_path):
     pc = cpa_levels(md, mmm, fit, [1.0], per_channel={"tv": [0.5, 2.0]})
     assert list(pc.loc[pc["channel"] == "tv", "cpa"]) == [0.5, 2.0]
     assert set(pc.loc[pc["channel"] == "tv", "source"]) == {"指定"}
+
+
+def test_control_contributions(tmp_path):
+    from mmm.analysis import control_contributions
+
+    cfg = load_config(_write_cfg(tmp_path))
+    df = pd.read_csv(tmp_path / "d.csv")
+    md = build_model_data(validate_dataframe(df, cfg), cfg)
+    fit = BayesianMMM(cfg, md).fit()
+    cs, cw = control_contributions(md, fit)
+    kinds = dict(zip(cs["variable"], cs["kind"]))
+    assert kinds["price"] == "連続の変数" and kinds["promo"] == "0/1 の変数"
+    assert all(kinds[v] == "イベント" for v in kinds if v.startswith("event_"))
+    # 連続の変数は平均基準 → 期間合計 ≈ 0、0/1 の変数は該当なしの週の貢献 = 0
+    assert abs(cs.set_index("variable").loc["price", "total_contribution"]) < 1e-6
+    promo_w = cw[cw["variable"] == "promo"].reset_index(drop=True)
+    assert (promo_w.loc[promo_w["value"] == 0, "contribution"] == 0).all()
+    # 週次の合計 = 期間合計
+    tot = cw.groupby("variable")["contribution"].sum()
+    np.testing.assert_allclose(tot[cs["variable"]].to_numpy(), cs["total_contribution"].to_numpy(),
+                               rtol=1e-6, atol=1e-6)

@@ -87,6 +87,54 @@ def baseline_components(md: ModelData, fit: FitResult) -> pd.DataFrame:
                          "controls": other.mean(axis=0)})
 
 
+def control_contributions(md: ModelData, fit: FitResult) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """広告以外の変数（コントロール変数・イベントフラグ）ごとの貢献。
+
+    貢献は「その変数が基準の値だった場合」との差:
+      - 0/1 の変数（イベント・プロモなど）: 基準 = 0（その週にイベント等がなかった場合）
+      - 連続の変数（価格など）            : 基準 = 期間平均（平均的な水準だった場合）
+    1 単位あたりの効果 = 係数 ÷ 標準偏差 × KPI スケール（標準化して投入しているため）。
+    戻り値: (変数ごとの要約, 週次の貢献 long 形式)
+    """
+    from .events import BUILTIN_EVENTS, EVENT_PREFIX
+
+    if "control_coef" not in fit.posterior or not md.control_names:
+        return pd.DataFrame(), pd.DataFrame()
+    coef = fit.posterior["control_coef"]  # (D, K)
+    lo_q, hi_q = interval_bounds()
+    total_kpi = float(md.y.sum())
+    rows, weekly = [], []
+    for k, col in enumerate(md.control_names):
+        raw = md.controls[:, k] * md.control_std[k] + md.control_mean[k]
+        vals = np.unique(np.round(raw, 9))
+        binary = set(vals.tolist()) <= {0.0, 1.0}
+        ref = 0.0 if binary else float(raw.mean())
+        per_unit = coef[:, k] / md.control_std[k] * md.y_scale  # (D,) KPI / 変数 1 単位
+        contrib = per_unit[:, None] * (raw - ref)[None, :]  # (D, T)
+        total = contrib.sum(axis=1)
+        is_event = col.startswith(EVENT_PREFIX)
+        name = col[len(EVENT_PREFIX):] if is_event else col
+        label = BUILTIN_EVENTS.get(name, {}).get("label", name) if is_event else col
+        tl, th = np.quantile(total, [lo_q, hi_q])
+        ul, uh = np.quantile(per_unit, [lo_q, hi_q])
+        rows.append({
+            "variable": col, "label": label,
+            "kind": "イベント" if is_event else ("0/1 の変数" if binary else "連続の変数"),
+            "reference": "0（該当なしの週）" if binary else f"期間平均 {ref:,.4g}",
+            "effect_per_unit": float(per_unit.mean()), "effect_per_unit_lo": float(ul),
+            "effect_per_unit_hi": float(uh),
+            "total_contribution": float(total.mean()), "total_lo": float(tl), "total_hi": float(th),
+            "share_of_kpi": float(total.mean() / total_kpi) if total_kpi else np.nan,
+            "abs_weekly_mean": float(np.abs(contrib.mean(axis=0)).mean()),
+            "prob_positive_effect": float((per_unit > 0).mean()),
+        })
+        cm = contrib.mean(axis=0)
+        for t in range(len(md.y)):
+            weekly.append({"date": md.dates.iloc[t], "variable": col, "label": label,
+                           "value": raw[t], "contribution": cm[t]})
+    return pd.DataFrame(rows), pd.DataFrame(weekly)
+
+
 def event_effects(md: ModelData, fit: FitResult, cfg) -> pd.DataFrame:
     """イベントフラグ（年末年始・GW・お盆・SW・任意のイベント）の効果。
 

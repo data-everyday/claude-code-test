@@ -167,6 +167,52 @@ def roi_scale(roi_values) -> tuple[float, str, str]:
     return SPEND_MULTS[-1]
 
 
+def fig_control_totals(cs: pd.DataFrame) -> str:
+    """変数ごとの期間合計の貢献（区間つき）。英語ラベル（変数名）で日本語フォント非依存。"""
+    n = len(cs)
+    y = np.arange(n)
+    m, lo, hi = cs["total_contribution"], cs["total_lo"], cs["total_hi"]
+    fig, ax = plt.subplots(figsize=(7.5, 0.5 * n + 1.3))
+    ax.barh(y, m, color=[NAVY if v >= 0 else "#c0504d" for v in m], alpha=0.9, height=0.55)
+    ax.errorbar(m, y, xerr=[m - lo, hi - m], fmt="none", ecolor="#555", capsize=3, lw=1)
+    ax.axvline(0, color="#999", lw=0.8)
+    span = max(float(np.abs(lo).max()), float(np.abs(hi).max()), 1e-9)
+    for i in range(n):
+        x = hi.iloc[i] if m.iloc[i] >= 0 else lo.iloc[i]
+        ax.text(x + (span * 0.02 if m.iloc[i] >= 0 else -span * 0.02), i,
+                f"{m.iloc[i]:+,.0f} ({cs['share_of_kpi'].iloc[i]:+.1%})", va="center",
+                ha="left" if m.iloc[i] >= 0 else "right", fontsize=8.5)
+    ax.set_xlim(-span * 1.5 if (lo < 0).any() else 0, span * 1.5)
+    ax.set_yticks(y, cs["variable"])
+    ax.invert_yaxis()
+    ax.set_xlabel(f"total contribution over the period (KPI), {interval_label()} interval", fontsize=9)
+    ax.spines[["top", "right"]].set_visible(False)
+    return _img(fig)
+
+
+def fig_control_weekly(cw: pd.DataFrame, variables: list[str]) -> str:
+    """変数ごとの週次の貢献（小さなグラフを並べる）。"""
+    n = len(variables)
+    cols = min(n, 3)
+    rows = int(np.ceil(n / cols))
+    fig, axes = plt.subplots(rows, cols, figsize=(4.2 * cols, 2.4 * rows), squeeze=False, sharex=True)
+    for i, v in enumerate(variables):
+        ax = axes[i // cols][i % cols]
+        d = cw[cw["variable"] == v]
+        vals = d["contribution"].to_numpy()
+        ax.bar(pd.to_datetime(d["date"]), vals, width=6,
+               color=[NAVY if x >= 0 else "#c0504d" for x in vals], alpha=0.85)
+        ax.axhline(0, color="#999", lw=0.6)
+        ax.set_title(v, fontsize=9)
+        ax.tick_params(labelsize=7)
+        ax.spines[["top", "right"]].set_visible(False)
+    for j in range(n, rows * cols):
+        axes[j // cols][j % cols].axis("off")
+    fig.autofmt_xdate()
+    fig.tight_layout()
+    return _img(fig)
+
+
 def fig_events(ev: pd.DataFrame) -> str:
     """イベントごとの「該当週 1 週あたりの効果」（区間つき）。ラベルは英語名（フォント非依存）。"""
     n = len(ev)
@@ -401,7 +447,8 @@ def build_report(path, *, cfg, summ, dec, pred, metrics, curves, decay, diagnost
                  optimal_line: pd.DataFrame | None = None,
                  events: pd.DataFrame | None = None,
                  sat_levels: pd.DataFrame | None = None,
-                 cpa_levels: pd.DataFrame | None = None) -> None:
+                 cpa_levels: pd.DataFrame | None = None,
+                 controls: tuple | None = None) -> None:
     IL = interval_label()
     prior_html = ""
     if prior_share:
@@ -530,6 +577,38 @@ def build_report(path, *, cfg, summ, dec, pred, metrics, curves, decay, diagnost
             '区間が 0 をまたぐイベントは、効果があるとは言い切れません。期間中の合計効果 = 1 週あたりの効果 × 該当週数。</p>'
             + fig_events(events)
             + f'<div class="scroll">{_table(ev_view, {f"1 週あたりの効果（{K}）": "{:+,.0f}", "週平均に対する割合": "{:+.1%}", f"期間中の合計効果（{K}）": "{:+,.0f}", "効果がプラスの確率": "{:.0%}"})}</div>')
+
+    controls_html = ""
+    if controls is not None and len(controls[0]):
+        cs, cw = controls
+        cs = cs.sort_values("abs_weekly_mean", ascending=False).reset_index(drop=True)
+        cont = cs["kind"] == "連続の変数"
+        cv = pd.DataFrame({
+            "変数": cs["variable"],
+            "名前": cs["label"],
+            "種類": cs["kind"],
+            "貢献の基準": cs["reference"],
+            f"1 単位あたりの効果（{K}）": [f"{a:+,.4g}（{b:+,.4g}〜{c:+,.4g}）" for a, b, c in
+                                    zip(cs["effect_per_unit"], cs["effect_per_unit_lo"], cs["effect_per_unit_hi"])],
+            f"期間合計の貢献（{K}）": [("—（平均基準のため 0）" if c else f"{v:+,.0f}")
+                                     for v, c in zip(cs["total_contribution"], cont)],
+            f"{IL}区間": [("—" if c else f"{a:+,.0f}〜{b:+,.0f}")
+                         for a, b, c in zip(cs["total_lo"], cs["total_hi"], cont)],
+            f"{K}全体に対する割合": [("—" if c else f"{v:+.1%}") for v, c in zip(cs["share_of_kpi"], cont)],
+            "効果がプラスの確率": cs["prob_positive_effect"],
+        })
+        controls_html = (
+            f'<h2>広告以外の要因の貢献（コントロール変数・イベント）</h2><p class="muted">'
+            f'モデルに入れた広告以外の変数ごとに、{K}をどれだけ押し上げた（押し下げた）かを示します。'
+            '貢献は「その変数が基準の値だった場合」との差です。'
+            '<b>0/1 の変数</b>（イベント・プロモなど）は基準 = 0 で、該当した週の上乗せ（または下押し）の合計。'
+            '<b>連続の変数</b>（価格など）は基準 = 期間平均で、平均より高い週・低い週の影響を表します'
+            '（平均からのずれなので、期間合計はほぼ 0 になります。週次のグラフと「1 単位あたりの効果」を見てください）。'
+            '1 単位あたりの効果 = その変数が 1 増えたときの週あたりの増減。トレンドと季節性は上の「ベースラインの内訳」を参照。</p>'
+            + (fig_control_totals(cs[~cont].reset_index(drop=True)) if (~cont).any() else '')
+            + f'<div class="scroll">{_table(cv, {"効果がプラスの確率": "{:.0%}"})}</div>'
+            + '<h3>週次の貢献（変数別）</h3>'
+            + fig_control_weekly(cw, list(cs["variable"])))
 
     opt_html = ""
     if opt:
@@ -719,6 +798,8 @@ KPI（目的変数）{K}（列名 {html.escape(cfg.target_column)}）／ チャ�
 {base_html}
 
 {events_html}
+
+{controls_html}
 
 <h2>出稿割合と{K}への貢献割合</h2>
 <p class="muted">ネイビー：広告費全体に占める各チャネルの出稿金額の割合（合計 100%）。
