@@ -256,7 +256,11 @@ def response_curves(md: ModelData, mmm: BayesianMMM, fit: FitResult,
     return pd.DataFrame(rows)
 
 
-def weekly_saturation(md: ModelData, mmm: BayesianMMM, fit: FitResult, n_draws: int = 200,
+# 週次飽和曲線と、その上に引く線（25/50/75%・CPA・最適ライン）は同じ事後サンプルを使う
+CURVE_DRAWS = 400
+
+
+def weekly_saturation(md: ModelData, mmm: BayesianMMM, fit: FitResult, n_draws: int = CURVE_DRAWS,
                       n_points: int = 160, max_ratio: float = 1.3,
                       optimal: pd.DataFrame | None = None,
                       sat_levels: pd.DataFrame | None = None
@@ -290,14 +294,16 @@ def weekly_saturation(md: ModelData, mmm: BayesianMMM, fit: FitResult, n_draws: 
             r = sat_levels.loc[sat_levels["channel"] == ch]
             if len(r) and "spend_at_75" in r:
                 xmax = max(xmax, min(float(r["spend_at_75"].iloc[0]) * 1.1, actual_max * 3))
-        grid = np.linspace(0, xmax, n_points)
+        # 原点付近は曲線の傾きが急なので点を密に（等間隔 + 対数間隔）
+        grid = np.unique(np.concatenate([np.linspace(0, xmax, n_points),
+                                         np.geomspace(xmax * 1e-4, xmax, n_points // 2)]))
         xs = grid / md.spend_scale[i]
         D = len(p["beta"])
-        g = np.broadcast_to(xs[None, :, None], (D, n_points, 1))
+        g = np.broadcast_to(xs[None, :, None], (D, len(grid), 1))
         yc = hill_np(g, p["K"][:, i:i + 1], p["S"][:, i:i + 1])[:, :, 0] * p["beta"][:, i:i + 1] \
-            * md.y_scale  # (D, n_points)
+            * md.y_scale  # (D, len(grid))
         lo, hi = _q(yc)
-        for k in range(n_points):
+        for k in range(len(grid)):
             curve_rows.append({"channel": ch, "effective_spend": grid[k],
                                "contribution_mean": yc[:, k].mean(),
                                "contribution_lo": lo[k], "contribution_hi": hi[k]})
@@ -330,12 +336,13 @@ def weekly_saturation(md: ModelData, mmm: BayesianMMM, fit: FitResult, n_draws: 
 
 
 def saturation_levels(md: ModelData, mmm: BayesianMMM, fit: FitResult,
-                      levels=(0.25, 0.5, 0.75), n_draws: int = 400) -> pd.DataFrame:
+                      levels=(0.25, 0.5, 0.75), n_draws: int = CURVE_DRAWS) -> pd.DataFrame:
     """最大効果の各割合（既定 25/50/75%）に達する週次出稿額。
 
     Hill 関数 x^S/(x^S+K^S) が p になる x は  x_p = K × (p/(1-p))^(1/S)（スケール済み）。
     週次出稿額で見るため、毎週同じ額を出稿し続ける定常状態（adstock 後 = 週次出稿額）を仮定。
     「最大効果」は曲線の上限を外挿した値なので、実績の最大出稿額を超える到達額は不確実。
+    線の位置（spend_at_p）はグラフに描く事後平均の曲線から求めるので、グラフ上の読み取りと一致する。
     """
     p = subsample(fit.posterior, n_draws)
     lo_q, hi_q = interval_bounds()
@@ -345,10 +352,18 @@ def saturation_levels(md: ModelData, mmm: BayesianMMM, fit: FitResult,
         K, S = p["K"][:, i], p["S"][:, i]
         actual_max = float(md.spend[:, i].max())
         row = {"channel": ch, "max_weekly_spend": actual_max}
+        # 線の位置は、レポートに描く曲線（事後平均の曲線）が上限（事後平均）の p に達する出稿額。
+        # 区間はサンプルごとの到達額から。
+        beta = p["beta"][:, i]
+        grid = np.geomspace(actual_max * 1e-4, actual_max * 1e3, 4000)
+        u = np.broadcast_to((grid / scale)[None, :, None], (len(K), len(grid), 1))
+        mean_curve = (hill_np(u, K[:, None], S[:, None])[:, :, 0] * beta[:, None]).mean(axis=0)
+        frac = mean_curve / beta.mean()
         for lv in levels:
             x = K * (lv / (1 - lv)) ** (1 / S) * scale
             tag = f"{int(round(lv * 100))}"
-            row[f"spend_at_{tag}"] = float(np.median(x))
+            row[f"spend_at_{tag}"] = (float(np.interp(lv, frac, grid)) if frac[-1] >= lv
+                                      else float(np.median(x)))
             row[f"spend_at_{tag}_lo"] = float(np.quantile(x, lo_q))
             row[f"spend_at_{tag}_hi"] = float(np.quantile(x, hi_q))
         rows.append(row)
@@ -371,12 +386,13 @@ def _nice_values(lo: float, hi: float, n: int = 4) -> list[float]:
 
 def cpa_levels(md: ModelData, mmm: BayesianMMM, fit: FitResult, thresholds,
                per_channel: dict | None = None, auto: bool = True,
-               n_draws: int = 400, n_grid: int = 1000, max_ratio: float = 5.0,
+               n_draws: int = CURVE_DRAWS, n_grid: int = 1000, max_ratio: float = 5.0,
                plot_ratio: float = 1.3) -> pd.DataFrame:
     """平均 CPA（週次出稿額 ÷ その出稿が持ち越し込みで生む KPI）が各しきい値に達する週次出稿額。
 
     飽和曲線では出稿を増やすほど平均 CPA が上がるので、「平均 CPA がしきい値以下で出稿できる上限額」を返す
-    （S 字で少額側も CPA が高い場合は、上限側の交点）。事後サンプルごとに求め、中央値と区間を返す。
+    （S 字で少額側も CPA が高い場合は、上限側の交点）。線の位置（spend_at_cpa）はレポートに描く
+    事後平均の曲線から求め（グラフ上の読み取りと一致）、区間は事後サンプルごとの交点から求める。
 
     しきい値はチャネルごとに、per_channel の指定 → 全体の thresholds の順で使う。
     auto=True のとき、全体の thresholds のうちグラフ範囲（実績最大 × plot_ratio）に入るものが 2 本未満の
@@ -395,6 +411,20 @@ def cpa_levels(md: ModelData, mmm: BayesianMMM, fit: FitResult, thresholds,
                     p["K"][:, i:i + 1], p["S"][:, i:i + 1])[:, :, 0] * p["beta"][:, i:i + 1] * md.y_scale
         cpa = grid[None, :] / np.maximum(f, 1e-300)  # (D, n_grid)
 
+        cpa_mean = grid / np.maximum(f.mean(axis=0), 1e-300)  # レポートに描く事後平均の曲線での平均 CPA
+
+        def point_at(c):
+            """事後平均の曲線上で平均 CPA が c 以下になる最大の出稿額（グラフ上の読み取りと一致）。"""
+            ok = cpa_mean <= c
+            if not ok.any():
+                return 0.0
+            if ok[-1]:
+                return np.inf
+            j = len(grid) - 1 - int(np.argmax(ok[::-1]))
+            # 隣の格子点との間で線形補間して交点を求める
+            x0, x1, c0, c1 = grid[j], grid[j + 1], cpa_mean[j], cpa_mean[j + 1]
+            return float(x0 + (c - c0) * (x1 - x0) / (c1 - c0)) if c1 != c0 else float(x0)
+
         def spend_at(c):
             ok = cpa <= c
             last = np.where(ok.any(axis=1), n_grid - 1 - np.argmax(ok[:, ::-1], axis=1), -1)
@@ -407,14 +437,13 @@ def cpa_levels(md: ModelData, mmm: BayesianMMM, fit: FitResult, thresholds,
         else:
             ths, src = list(thresholds), "共通"
             if auto:
-                in_plot = sum(1 for c in ths
-                              if 0 < np.quantile(spend_at(c)[0], 0.5, method="inverted_cdf")
-                              <= actual_max * plot_ratio)
+                in_plot = sum(1 for c in ths if 0 < point_at(c) <= actual_max * plot_ratio)
                 if in_plot < 2:
                     # グラフ範囲内で、平均 CPA（事後中央値の曲線）が最小になる点からグラフ右端までの
                     # CPA の幅から選ぶ（S 字の少額側の高い CPA は除外し、上限側の交点がグラフ内に入るように）
-                    cpa_med = np.median(cpa, axis=0)
-                    rng = np.flatnonzero(grid <= actual_max * plot_ratio)
+                    cpa_med = cpa_mean
+                    # 実績最大の 10%〜130% の範囲で（原点ぎりぎりの線は実用的でないため除く）
+                    rng = np.flatnonzero((grid >= actual_max * 0.1) & (grid <= actual_max * plot_ratio))
                     lo_c = float(cpa_med[rng].min())
                     hi_c = float(cpa_med[rng[-1]])
                     auto_ths = _nice_values(lo_c * 1.02, hi_c)
@@ -424,7 +453,7 @@ def cpa_levels(md: ModelData, mmm: BayesianMMM, fit: FitResult, thresholds,
             x, last = spend_at(c)
             rows.append({
                 "channel": ch, "cpa": float(c), "source": src,
-                "spend_at_cpa": float(np.quantile(x, 0.5, method="inverted_cdf")),
+                "spend_at_cpa": point_at(c),
                 "spend_at_cpa_lo": float(np.quantile(x, lo_q, method="inverted_cdf")),
                 "spend_at_cpa_hi": float(np.quantile(x, hi_q, method="inverted_cdf")),
                 "prob_never_reached": float((last < 0).mean()),
@@ -440,7 +469,7 @@ def _hill_marginal(u: np.ndarray, K: np.ndarray, S: np.ndarray) -> np.ndarray:
 
 
 def optimal_weekly_spend(md: ModelData, mmm: BayesianMMM, fit: FitResult, econ: dict,
-                         n_draws: int = 200, n_grid: int = 800, max_ratio: float = 5.0
+                         n_draws: int = CURVE_DRAWS, n_grid: int = 800, max_ratio: float = 5.0
                          ) -> pd.DataFrame:
     """利益ベースで「追加の 1 円が 1 円以上の粗利を生む」最大の週次出稿額（限界利益 ROI = 1 の点）。
 
@@ -465,6 +494,15 @@ def optimal_weekly_spend(md: ModelData, mmm: BayesianMMM, fit: FitResult, econ: 
             return beta * md.y_scale * _hill_marginal(np.asarray(x)[None, :] / scale, K, S) / scale * v
 
         mp = mprofit(grid)
+        # 線の位置: 事後平均の曲線の傾き（= 限界利益 ROI の平均）が 1 になる最大の出稿額
+        mp_mean = mp.mean(axis=0)
+        okm = mp_mean >= 1.0
+        if not okm.any():
+            opt_point = 0.0
+        elif okm[-1]:
+            opt_point = np.inf
+        else:
+            opt_point = float(grid[len(grid) - 1 - int(np.argmax(okm[::-1]))])
         ok = mp >= 1.0
         last = np.where(ok.any(axis=1), n_grid - 1 - np.argmax(ok[:, ::-1], axis=1), -1)
         opt = np.where(last < 0, 0.0, grid[np.clip(last, 0, None)])
@@ -485,7 +523,7 @@ def optimal_weekly_spend(md: ModelData, mmm: BayesianMMM, fit: FitResult, econ: 
         rows.append({
             "channel": ch,
             "current_weekly_spend": cur,
-            "optimal_weekly_spend": float(np.quantile(opt, 0.5, method="inverted_cdf")),
+            "optimal_weekly_spend": opt_point,
             "optimal_lo": float(np.quantile(opt, lo_q, method="inverted_cdf")),
             "optimal_hi": float(np.quantile(opt, hi_q, method="inverted_cdf")),
             "prob_beyond_range": float(beyond.mean()),

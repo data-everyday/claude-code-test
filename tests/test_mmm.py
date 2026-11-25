@@ -427,9 +427,10 @@ def test_saturation_levels_formula(tmp_path):
     fit = mmm.fit()
     sl = saturation_levels(md, mmm, fit)
     assert (sl["spend_at_25"] < sl["spend_at_50"]).all() and (sl["spend_at_50"] < sl["spend_at_75"]).all()
-    # 50% 到達額 = 半飽和点 K（の中央値）× スケール
-    k_med = np.median(fit.posterior["K"], axis=0) * md.spend_scale
-    np.testing.assert_allclose(sl["spend_at_50"], k_med, rtol=0.05)
+    # 線の位置（グラフの曲線基準）は、サンプルごとの到達額の区間の中に入る
+    for tag in ("25", "50", "75"):
+        assert ((sl[f"spend_at_{tag}_lo"] <= sl[f"spend_at_{tag}"]) &
+                (sl[f"spend_at_{tag}"] <= sl[f"spend_at_{tag}_hi"])).all()
     # 到達額での Hill の値がその割合になる（事後中央値のパラメータで確認）
     i = 0
     K, S = np.median(fit.posterior["K"][:, i]), np.median(fit.posterior["S"][:, i])
@@ -525,3 +526,35 @@ def test_colab_saturation_choice(tmp_path):
         build_config(**kw, saturation_per_channel="radio=c")
     with pytest.raises(ValueError, match="auto / c / s"):
         build_config(**kw, saturation_per_channel="tv=x")
+
+
+def test_lines_consistent_with_plotted_curve(tmp_path):
+    """CPA ライン・飽和度ライン・最適ラインの位置が、レポートに描く曲線（事後平均）と一致する。"""
+    from mmm.analysis import cpa_levels, optimal_weekly_spend, saturation_levels, weekly_saturation
+
+    cfg = load_config(_write_cfg(tmp_path))
+    df = pd.read_csv(tmp_path / "d.csv")
+    md = build_model_data(validate_dataframe(df, cfg), cfg)
+    mmm = BayesianMMM(cfg, md)
+    fit = mmm.fit()
+    curve, _ = weekly_saturation(md, mmm, fit)
+    cl = cpa_levels(md, mmm, fit, [1e9], auto=True)
+    checked = 0
+    for _, r in cl.iterrows():
+        c = curve[curve["channel"] == r["channel"]]
+        x = r["spend_at_cpa"]
+        if np.isfinite(x) and r["max_weekly_spend"] * 0.1 <= x <= c["effective_spend"].max():
+            y = np.interp(x, c["effective_spend"], c["contribution_mean"])
+            assert x / y == pytest.approx(r["cpa"], rel=0.02)
+            checked += 1
+    assert checked >= 2
+    sl = saturation_levels(md, mmm, fit)
+    p = fit.posterior
+    for i, ch in enumerate(md.channel_names):
+        c = curve[curve["channel"] == ch]
+        x50 = sl.loc[i, "spend_at_50"]
+        if x50 <= c["effective_spend"].max():
+            top = p["beta"][:, i].mean() * md.y_scale  # 上限（事後平均）
+            assert np.interp(x50, c["effective_spend"], c["contribution_mean"]) / top == pytest.approx(0.5, abs=0.02)
+    ol = optimal_weekly_spend(md, mmm, fit, {"value_per_kpi": 1.0, "gross_margin": 1.0})
+    assert (ol["optimal_weekly_spend"] >= 0).all()
