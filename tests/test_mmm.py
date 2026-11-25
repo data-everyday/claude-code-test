@@ -482,3 +482,22 @@ def test_control_contributions(tmp_path):
     tot = cw.groupby("variable")["contribution"].sum()
     np.testing.assert_allclose(tot[cs["variable"]].to_numpy(), cs["total_contribution"].to_numpy(),
                                rtol=1e-6, atol=1e-6)
+
+
+def test_model_settings_and_params(tmp_path):
+    from mmm.analysis import estimated_params, model_settings
+
+    cfg = load_config(_write_cfg(tmp_path))
+    df = pd.read_csv(tmp_path / "d.csv")
+    md = build_model_data(validate_dataframe(df, cfg), cfg)
+    mmm = BayesianMMM(cfg, md)
+    st = model_settings(cfg, md, mmm)
+    assert set(st) == {"target", "channels", "others", "priors", "run"}
+    assert list(st["channels"]["チャネル"]) == ["tv", "search", "social"]
+    assert st["target"].iloc[0]["列名"] == "sales"
+    kinds = set(st["others"]["種類"])
+    assert {"コントロール変数", "イベントフラグ", "トレンド", "季節性"} <= kinds
+    fit = mmm.fit()
+    ep = estimated_params(md, mmm, fit)
+    assert list(ep["チャネル"]) == ["tv", "search", "social"]
+    assert ep.loc[0, "adstock 型"] == "delayed" and ep.loc[1, "効果が半分になるまで（週）"] != "—"

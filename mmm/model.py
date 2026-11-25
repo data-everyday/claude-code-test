@@ -38,6 +38,20 @@ from .transforms import (
 
 log = logging.getLogger(__name__)
 
+# 事前分布の設定（モデルとレポートの両方がここを参照する）
+PRIORS = {
+    "alpha": (1.0, 3.0),        # adstock 減衰率 α ~ Beta(a, b)
+    "theta_raw": (1.5, 3.0),    # delayed のピーク位置 θ/(L-1) ~ Beta(a, b)
+    "K": (3.0, 3.0),            # 半飽和点 K（チャネル最大出稿 = 1 のスケール）~ Beta(a, b)
+    "S_auto": (5.0, 3.0),       # 形 S ~ Gamma(shape, rate)（saturation: auto）
+    "S_excess": (2.0, 2.0),     # S - 1 ~ Gamma(shape, rate)（saturation: s）
+    "intercept_sd": 1.0,        # 切片 ~ Normal(KPI 平均（スケール後）, sd)
+    "trend_sd": 1.0,            # トレンド傾き ~ Normal(0, sd)
+    "fourier_sd": 0.5,          # 季節性の係数 ~ Normal(0, sd)
+    "control_sd": 1.0,          # コントロール係数 ~ Normal(0, sd) / ±HalfNormal(sd)
+    "sigma_sd": 0.5,            # 誤差 σ ~ HalfNormal(sd)
+}
+
 PARAM_VARS = ["intercept", "beta", "alpha", "theta", "K", "S", "sigma",
               "trend_coef", "fourier_coef", "control_coef"]
 
@@ -185,12 +199,13 @@ class BayesianMMM:
             xlag = pt.as_tensor_variable(self.xlag)
 
             # --- adstock ---
-            alpha = pm.Beta("alpha", alpha=1.0, beta=3.0, dims="channel")
+            alpha = pm.Beta("alpha", alpha=PRIORS["alpha"][0], beta=PRIORS["alpha"][1], dims="channel")
             # theta（ピークラグ）は delayed チャネルのみ推定。それ以外は 0 固定
             d_idx = np.flatnonzero(spec.is_delayed)
             theta = pt.zeros(C)
             if len(d_idx):
-                theta_raw = pm.Beta("theta_raw", alpha=1.5, beta=3.0, shape=len(d_idx))
+                theta_raw = pm.Beta("theta_raw", alpha=PRIORS["theta_raw"][0], beta=PRIORS["theta_raw"][1],
+                                      shape=len(d_idx))
                 theta = pt.set_subtensor(theta[d_idx], theta_raw * (spec.lags[d_idx] - 1))
             theta = pm.Deterministic("theta", theta, dims="channel")
             w_geo = geometric_weights_pt(alpha, spec.max_lag)
@@ -200,17 +215,17 @@ class BayesianMMM:
             adstocked = apply_adstock_pt(xlag, w)  # (T, C)
 
             # --- saturation (Hill) ---
-            K = pm.Beta("K", alpha=3.0, beta=3.0, dims="channel")
+            K = pm.Beta("K", alpha=PRIORS["K"][0], beta=PRIORS["K"][1], dims="channel")
             # 形 S: auto = 推定（S≤1 で C 字, S>1 で S 字）/ c = C 字に固定(S=1) / s = S 字に限定(S>1)
             sat_types = np.array([c.saturation for c in cfg.channels])
             S = pt.ones(C)
             a_idx = np.flatnonzero(sat_types == "auto")
             s_idx = np.flatnonzero(sat_types == "s")
             if len(a_idx):
-                S = pt.set_subtensor(S[a_idx], pm.Gamma("S_auto", alpha=5.0, beta=3.0,
+                S = pt.set_subtensor(S[a_idx], pm.Gamma("S_auto", alpha=PRIORS["S_auto"][0], beta=PRIORS["S_auto"][1],
                                                         shape=len(a_idx)))
             if len(s_idx):
-                S = pt.set_subtensor(S[s_idx], 1.0 + pm.Gamma("S_excess", alpha=2.0, beta=2.0,
+                S = pt.set_subtensor(S[s_idx], 1.0 + pm.Gamma("S_excess", alpha=PRIORS["S_excess"][0], beta=PRIORS["S_excess"][1],
                                                               shape=len(s_idx)))
             S = pm.Deterministic("S", S, dims="channel")
             sat = hill_pt(adstocked, K, S)  # (T, C)
@@ -232,13 +247,13 @@ class BayesianMMM:
                                        dims=("time", "channel"))
 
             # --- ベースライン ---
-            intercept = pm.Normal("intercept", mu=float(y_s.mean()), sigma=1.0)
+            intercept = pm.Normal("intercept", mu=float(y_s.mean()), sigma=PRIORS["intercept_sd"])
             mu = intercept + contrib.sum(axis=1)
             # トレンド: linear = 期間全体で 1 本の直線（週ごとの揺らぎはない）
             #          changepoint = 区分線形（変化点ごとに傾きが変わる。δ ~ Laplace で多くは ≈0）
             trend = pt.zeros(T)
             if cfg.trend in ("linear", "changepoint"):
-                trend_coef = pm.Normal("trend_coef", 0.0, 1.0)
+                trend_coef = pm.Normal("trend_coef", 0.0, PRIORS["trend_sd"])
                 trend = trend_coef * md.trend
             if cfg.trend == "changepoint" and md.changepoint_basis.shape[1]:
                 delta = pm.Laplace("changepoint_delta", 0.0, float(cfg.changepoint["prior_scale"]),
@@ -248,7 +263,7 @@ class BayesianMMM:
             mu = mu + trend
             season = pt.zeros(T)
             if md.fourier.shape[1]:
-                fc = pm.Normal("fourier_coef", 0.0, 0.5, dims="fourier")
+                fc = pm.Normal("fourier_coef", 0.0, PRIORS["fourier_sd"], dims="fourier")
                 season = pt.dot(md.fourier, fc)
             season = pm.Deterministic("seasonality", season, dims="time")
             mu = mu + season
@@ -257,16 +272,16 @@ class BayesianMMM:
                 for ctl in cfg.controls:
                     nm = f"ctl_{ctl.column}"
                     if ctl.sign == "positive":
-                        coefs.append(pm.HalfNormal(nm, 1.0))
+                        coefs.append(pm.HalfNormal(nm, PRIORS["control_sd"]))
                     elif ctl.sign == "negative":
-                        coefs.append(-pm.HalfNormal(nm, 1.0))
+                        coefs.append(-pm.HalfNormal(nm, PRIORS["control_sd"]))
                     else:
-                        coefs.append(pm.Normal(nm, 0.0, 1.0))
+                        coefs.append(pm.Normal(nm, 0.0, PRIORS["control_sd"]))
                 cc = pm.Deterministic("control_coef", pt.stack(coefs), dims="control")
                 mu = mu + pt.dot(md.controls, cc)
 
             mu = pm.Deterministic("mu", mu, dims="time")
-            sigma = pm.HalfNormal("sigma", 0.5)
+            sigma = pm.HalfNormal("sigma", PRIORS["sigma_sd"])
             pm.Normal("y_obs", mu=mu[train_idx], sigma=sigma, observed=y_s[train_idx])
         return model
 

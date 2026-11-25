@@ -249,7 +249,9 @@ economics:
 
 | ファイル | 内容 |
 |---|---|
-| `report.html` | 単一ファイルの HTML レポート |
+| `report.html` | 単一ファイルの HTML レポート（冒頭に目的変数・説明変数・adstock・ヒル関数・事前分布・推定の設定を記載） |
+| `model_settings_*.csv` | モデルの設定（目的変数・広告チャネル・広告以外の変数・事前分布・推定の設定） |
+| `estimated_params.csv` | 推定された adstock（α・θ・半減期）とヒル関数（K・S）のパラメータ |
 | `channel_summary.csv` | チャネル別 総貢献・貢献シェア・ROI(区間)・限界ROI・adstock/Hill パラメータ |
 | `decomposition.csv` | 週次の貢献度分解（baseline + 各チャネル） |
 | `predictions.csv` / `fit_metrics.csv` | 予測値と精度指標 |

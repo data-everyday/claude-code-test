@@ -62,13 +62,14 @@ def per_spend(roi: float, unit: str) -> str:
     return f"広告費 1億 あたり +{smart_num(roi * 1e8)}{unit}"
 
 
-def _table(df: pd.DataFrame, fmt: dict | None = None) -> str:
+def _table(df: pd.DataFrame, fmt: dict | None = None, left: bool = False) -> str:
+    """left=True で全列を左寄せ（文章中心の表向け）。"""
     fmt = fmt or {}
     d = df.copy()
     for col, f in fmt.items():
         if col in d:
             d[col] = d[col].map(lambda v, f=f: "" if pd.isna(v) else (f(v) if callable(f) else f.format(v)))
-    return d.to_html(index=False, border=0, classes="tbl", escape=True)
+    return d.to_html(index=False, border=0, classes="tbl tl" if left else "tbl", escape=True)
 
 
 def fig_fit(pred: pd.DataFrame) -> str:
@@ -434,6 +435,7 @@ table.tbl{border-collapse:collapse;font-size:.85rem;width:max-content!important;
 table.tbl th,table.tbl td{padding:6px 10px;border-bottom:1px solid var(--line);text-align:right;white-space:nowrap!important;overflow:visible;width:auto!important;max-width:none!important}
 table.tbl th:first-child,table.tbl td:first-child{text-align:left}
 table.tbl th{background:var(--card)}
+table.tbl.tl th,table.tbl.tl td{text-align:left!important}
 """
 
 
@@ -448,7 +450,9 @@ def build_report(path, *, cfg, summ, dec, pred, metrics, curves, decay, diagnost
                  events: pd.DataFrame | None = None,
                  sat_levels: pd.DataFrame | None = None,
                  cpa_levels: pd.DataFrame | None = None,
-                 controls: tuple | None = None) -> None:
+                 controls: tuple | None = None,
+                 settings: dict | None = None,
+                 params: pd.DataFrame | None = None) -> None:
     IL = interval_label()
     prior_html = ""
     if prior_share:
@@ -609,6 +613,36 @@ def build_report(path, *, cfg, summ, dec, pred, metrics, curves, decay, diagnost
             + f'<div class="scroll">{_table(cv, {"効果がプラスの確率": "{:.0%}"})}</div>'
             + '<h3>週次の貢献（変数別）</h3>'
             + fig_control_weekly(cw, list(cs["variable"])))
+
+    settings_html = ""
+    if settings:
+        settings_html = (
+            '<h2>モデルの設定（使用した変数・関数・事前分布）</h2>'
+            '<h3>目的変数</h3>' + f'<div class="scroll">{_table(settings["target"], left=True)}</div>'
+            + '<h3>説明変数：広告チャネル</h3><p class="muted">各チャネルの広告費は '
+            '<b>adstock</b>（持ち越し効果）→ <b>ヒル関数</b>（飽和）の順に変換してからモデルに入れています。'
+            '<br>adstock：その週に効く出稿量 = Σ<sub>l</sub> w<sub>l</sub> × 出稿<sub>t−l</sub>'
+            '（geometric: w<sub>l</sub> ∝ α<sup>l</sup>、delayed: w<sub>l</sub> ∝ α<sup>(l−θ)²</sup>、重みの合計は 1）'
+            '<br>ヒル関数：効果 = x<sup>S</sup> ÷ (x<sup>S</sup> + K<sup>S</sup>)'
+            '（x = adstock 後の出稿量 ÷ チャネルの最大出稿額、K = 半飽和点、S = 形）'
+            f'<br>貢献 = ROI から逆算した係数 × ヒル関数の値（係数は常に正）</p>'
+            + f'<div class="scroll">{_table(settings["channels"], left=True)}</div>'
+            + '<h3>説明変数：広告以外</h3>'
+            + (f'<div class="scroll">{_table(settings["others"], left=True)}</div>' if len(settings["others"])
+               else '<p class="muted">なし</p>')
+            + '<h3>事前分布</h3><p class="muted">KPI は平均 = 1、広告費はチャネルの最大 = 1、'
+            'コントロール変数は平均 0・標準偏差 1 にスケールしたうえでの値です。</p>'
+            + f'<div class="scroll">{_table(settings["priors"], left=True)}</div>'
+            + '<h3>推定の設定</h3>' + f'<div class="scroll">{_table(settings["run"], left=True)}</div>')
+
+    params_html = ""
+    if params is not None and len(params):
+        params_html = (
+            f'<h3>推定された adstock・ヒル関数のパラメータ（平均と {IL} 区間）</h3><p class="muted">'
+            '効果が半分になるまで = geometric の場合に、出稿の効果が出稿週の半分に減るまでの週数。'
+            '半飽和点 K = 効果が上限の半分になる週次出稿額（毎週同じ額を出す場合）。'
+            '形 S が 1 より大きいと S 字（少額では効きにくい）、1 以下だと C 字（最初から効きが鈍っていく）。</p>'
+            + f'<div class="scroll">{_table(params, left=True)}</div>')
 
     opt_html = ""
     if opt:
@@ -783,6 +817,8 @@ KPI（目的変数）{K}（列名 {html.escape(cfg.target_column)}）／ チャ�
 <div class="kpi"><span>増分 1{U or "単位"}あたりの広告費（CPA）</span><b>{smart_num(blended_cpa)}</b><span>{per_spend(blended_roi, U)}（広告全体 ROI = {smart_num(blended_roi)}）</span></div>
 </div>
 
+{settings_html}
+
 <h2>収束診断</h2>{diag_html}
 
 <h2>予測精度（学習期間・テスト期間）</h2>
@@ -825,8 +861,9 @@ KPI（目的変数）{K}（列名 {html.escape(cfg.target_column)}）／ チャ�
 実績（点線）付近で曲線がまだ立っていれば増額の余地あり、寝ていれば飽和気味です。</p>
 {fig_response(curves, summ)}
 
-<h2>adstock（持越効果）</h2>
+<h2>adstock（持越効果）とヒル関数のパラメータ</h2>
 {fig_adstock(decay)}
+{params_html}
 {opt_html}
 {scen_html}
 </main></body></html>"""

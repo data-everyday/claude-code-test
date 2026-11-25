@@ -551,3 +551,133 @@ def prediction_frame(md: ModelData, fit: FitResult, seed: int = 0) -> pd.DataFra
     return pd.DataFrame({"date": md.dates.values, "actual": md.y, "predicted": mu.mean(axis=0),
                          "pred_lo": lo, "pred_hi": hi,
                          "split": np.where(fit.train_mask, "train", "test")})
+
+
+# ----------------------------------------------------------------------
+# モデル設定・推定パラメータ（レポート用）
+# ----------------------------------------------------------------------
+def model_settings(cfg, md: ModelData, mmm: BayesianMMM) -> dict[str, pd.DataFrame]:
+    """レポート冒頭に載せる「目的変数・説明変数・事前分布・推定の設定」の表。"""
+    from .events import BUILTIN_EVENTS, EVENT_PREFIX
+    from .model import PRIORS
+
+    sat_label = {"auto": "推定（C 字 / S 字も推定）", "c": "C 字に固定（S = 1）", "s": "S 字に限定（S > 1）"}
+    ad_label = {"geometric": "geometric（すぐ効き、徐々に減衰）", "delayed": "delayed（遅れてピーク）"}
+    target = pd.DataFrame([{
+        "KPI（目的変数）": cfg.kpi_name, "列名": cfg.target_column, "単位": cfg.kpi_unit or "—",
+        "期間": f"{md.dates.min():%Y-%m-%d} 〜 {md.dates.max():%Y-%m-%d}", "週数": len(md.y),
+    }])
+
+    priors = mmm.roi_priors()
+    ch_rows = []
+    for i, ch in enumerate(cfg.channels):
+        pr = priors[i]
+        if pr is None:
+            roi_txt = f"係数 ~ HalfNormal({cfg.beta_prior_sigma:g})"
+        else:
+            src = {"channel": "チャネル別に指定"}.get(pr["source"], pr["source"])
+            roi_txt = f"LogNormal(中央値 {pr['median']:.4g}, 幅 {pr['sd']:g}) ／ {src}"
+        ch_rows.append({
+            "チャネル": ch.name, "列名（広告費）": ch.column,
+            "adstock": ad_label[ch.adstock], "最大ラグ（週）": int(mmm.spec.lags[i]),
+            "飽和曲線（ヒル関数）の形": sat_label[ch.saturation],
+            "ROI の事前分布": roi_txt,
+        })
+    channels = pd.DataFrame(ch_rows)
+
+    o_rows = []
+    sign_label = {"free": "制約なし ~ Normal(0, {sd})", "positive": "正に制約 ~ HalfNormal({sd})",
+                  "negative": "負に制約 ~ −HalfNormal({sd})"}
+    for c in cfg.controls:
+        sd = PRIORS["control_sd"]
+        if c.generated and c.column.startswith(EVENT_PREFIX):
+            name = c.column[len(EVENT_PREFIX):]
+            ev = next((e for e in cfg.events if e["name"] == name), None)
+            if ev and ev["builtin"]:
+                b = BUILTIN_EVENTS[name]
+                period = f"毎年 {b['start'][0]}/{b['start'][1]}〜{b['end'][0]}/{b['end'][1]}"
+                label = b["label"]
+            else:
+                period = ", ".join(f"{a:%Y-%m-%d}〜{e_:%Y-%m-%d}" for a, e_ in (ev["periods"] if ev else []))
+                label = name
+            o_rows.append({"種類": "イベントフラグ", "変数": c.column,
+                           "内容": f"{label}（{period}、週が 1 日でも重なれば 1）",
+                           "事前分布（標準化後の係数）": sign_label[c.sign].format(sd=sd)})
+        else:
+            o_rows.append({"種類": "コントロール変数", "変数": c.column, "内容": "CSV の列（標準化して投入）",
+                           "事前分布（標準化後の係数）": sign_label[c.sign].format(sd=sd)})
+    trend_txt = {"none": "なし", "linear": "直線（期間全体で 1 本）",
+                 "changepoint": (f"変化点付き（{cfg.changepoint['interval_weeks']} 週ごと、"
+                                 f"傾きの変化 ~ Laplace(0, {cfg.changepoint['prior_scale']:g})）")}[cfg.trend]
+    if cfg.trend != "none":
+        o_rows.append({"種類": "トレンド", "変数": "trend", "内容": trend_txt,
+                       "事前分布（標準化後の係数）": f"傾き ~ Normal(0, {PRIORS['trend_sd']:g})"})
+    if cfg.seasonality_order > 0:
+        o_rows.append({"種類": "季節性", "変数": "seasonality",
+                       "内容": f"フーリエ項（周期 {cfg.seasonality_period:g} 週、次数 {cfg.seasonality_order}）",
+                       "事前分布（標準化後の係数）": f"各係数 ~ Normal(0, {PRIORS['fourier_sd']:g})"})
+    others = pd.DataFrame(o_rows)
+
+    pri = pd.DataFrame([
+        {"パラメータ": "adstock 減衰率 α", "事前分布": f"Beta({PRIORS['alpha'][0]:g}, {PRIORS['alpha'][1]:g})",
+         "説明": "0〜1。大きいほど効果が長く続く（平均 0.25 = やや短めを想定）"},
+        {"パラメータ": "adstock ピーク θ（delayed のみ）",
+         "事前分布": f"θ / (最大ラグ − 1) ~ Beta({PRIORS['theta_raw'][0]:g}, {PRIORS['theta_raw'][1]:g})",
+         "説明": "効果がピークになる週（出稿週 = 0）"},
+        {"パラメータ": "ヒル関数 半飽和点 K", "事前分布": f"Beta({PRIORS['K'][0]:g}, {PRIORS['K'][1]:g})",
+         "説明": "チャネルの最大出稿額を 1 としたときの、効果が上限の半分になる出稿量"},
+        {"パラメータ": "ヒル関数 形 S（auto）", "事前分布": f"Gamma({PRIORS['S_auto'][0]:g}, rate {PRIORS['S_auto'][1]:g})",
+         "説明": "S ≤ 1 で C 字、S > 1 で S 字（中央値約 1.56）"},
+        {"パラメータ": "ヒル関数 形 S（s = S 字限定）",
+         "事前分布": f"S − 1 ~ Gamma({PRIORS['S_excess'][0]:g}, rate {PRIORS['S_excess'][1]:g})", "説明": "S > 1"},
+        {"パラメータ": "ROI（広告効果の大きさ）", "事前分布": "LogNormal（チャネル別の中央値・幅は上の表）",
+         "説明": "常に正。auto は広告貢献シェアの事前中央値が想定シェアになるよう補正"},
+        {"パラメータ": "切片", "事前分布": f"Normal(KPI 平均, {PRIORS['intercept_sd']:g})", "説明": "KPI を平均 = 1 にスケールした単位"},
+        {"パラメータ": "誤差 σ", "事前分布": f"HalfNormal({PRIORS['sigma_sd']:g})", "説明": "KPI を平均 = 1 にスケールした単位"},
+    ])
+    d = cfg.default_roi
+    roi_def = ("なし（係数 ~ HalfNormal）" if d is None else
+               f"自動：想定広告シェア {d['ad_share']:.0%}、幅 {d['sd']:g}" if d["mode"] == "auto" else
+               f"直接指定：ROI 中央値 {d['median']:g}、幅 {d['sd']:g}")
+    run = pd.DataFrame([
+        {"項目": "ROI 事前分布の既定", "設定": roi_def},
+        {"項目": "サンプラー", "設定": (f"{cfg.sampler['nuts_sampler']}（NUTS）／ draws {cfg.sampler['draws']}・"
+                                   f"tune {cfg.sampler['tune']}・chains {cfg.sampler['chains']}・"
+                                   f"target_accept {cfg.sampler['target_accept']}")},
+        {"項目": "ホールドアウト検証", "設定": (f"末尾 {cfg.holdout_weeks} 週"
+                                       + ("（検証後に全期間で再推定）" if cfg.refit_full else "（再推定なし）")
+                                       if cfg.holdout_weeks > 0 else "なし")},
+        {"項目": "信用区間", "設定": interval_label()},
+    ])
+    return {"target": target, "channels": channels, "others": others, "priors": pri, "run": run}
+
+
+def estimated_params(md: ModelData, mmm: BayesianMMM, fit: FitResult) -> pd.DataFrame:
+    """チャネル別に推定された adstock・ヒル関数のパラメータ（事後平均と区間）。"""
+    p = fit.posterior
+    lo_q, hi_q = interval_bounds()
+
+    def fmt(a, digits="{:.2f}"):
+        return f"{digits.format(np.mean(a))}（{digits.format(np.quantile(a, lo_q))}〜{digits.format(np.quantile(a, hi_q))}）"
+
+    rows = []
+    for i, ch in enumerate(md.channel_names):
+        a = p["alpha"][:, i]
+        delayed = bool(mmm.spec.is_delayed[i])
+        with np.errstate(divide="ignore", invalid="ignore"):
+            half = np.where(a > 0, np.log(0.5) / np.log(a), 0.0)  # geometric: 効果が半分になる週数
+        S = p["S"][:, i]
+        K_money = p["K"][:, i] * md.spend_scale[i]  # 週次（adstock 後）出稿額の単位
+        rows.append({
+            "チャネル": ch,
+            "adstock 型": "delayed" if delayed else "geometric",
+            "減衰率 α": fmt(a),
+            "ピーク θ（週）": fmt(p["theta"][:, i], "{:.1f}") if delayed else "—（出稿週がピーク）",
+            "効果が半分になるまで（週）": "—" if delayed else fmt(half, "{:.1f}"),
+            "半飽和点 K（週次出稿額）": fmt(K_money, "{:,.0f}"),
+            "形 S": fmt(S),
+            "曲線の形": ("C 字（固定）" if mmm.cfg.channels[i].saturation == "c" else
+                      "S 字" if np.median(S) > 1.05 else
+                      "C 字" if np.median(S) < 0.95 else "ほぼ C 字（S ≈ 1）"),
+        })
+    return pd.DataFrame(rows)
