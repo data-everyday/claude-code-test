@@ -117,8 +117,52 @@ class BayesianMMM:
             if ch.roi_prior_mean is not None:
                 out.append({"median": ch.roi_prior_mean, "sd": ch.roi_prior_sd, "source": "channel"})
             else:
-                out.append(default)
+                out.append(dict(default) if default else None)
+        if d is not None and d["mode"] == "auto":
+            self._calibrate_auto_priors(out, train_mask, d["ad_share"])
         return out
+
+    def _calibrate_auto_priors(self, priors: list, train_mask: np.ndarray, target: float,
+                               n: int = 20000, seed: int = 0) -> None:
+        """auto の ROI 事前を一律に k 倍し、「広告貢献シェア（Σ ROI_c × 出稿_c ÷ KPI 合計）」の
+        事前の中央値がちょうど ad_share になるようにする。
+
+        各チャネルの ROI を独立な LogNormal で置くと、足し合わせたシェアの中央値は各チャネルの中央値の
+        和より大きくなる（右に裾が長い分布の和のため。sd=1 で 0.2 → 約 0.26）。そのずれを補正する。
+        チャネル別に roi_prior を指定したチャネルはそのまま（補正しない）。
+        """
+        auto_idx = [i for i, p in enumerate(priors) if p is not None and p["source"].startswith("auto")]
+        if not auto_idx:
+            return
+        kpi_total = float(self.md.y[train_mask].sum())
+        spend = self.md.spend[train_mask].sum(axis=0)
+        rng = np.random.default_rng(seed)
+        z = rng.standard_normal((n, len(priors)))
+        fixed = np.zeros(n)
+        auto_part = np.zeros(n)
+        for i, p in enumerate(priors):
+            if p is None:
+                continue
+            draws = p["median"] * np.exp(p["sd"] * z[:, i]) * spend[i] / kpi_total
+            if i in auto_idx:
+                auto_part += draws
+            else:
+                fixed += draws
+
+        def med(k):
+            return float(np.median(fixed + k * auto_part))
+
+        lo, hi = 1e-4, 1e2
+        if med(lo) >= target:  # 指定チャネルだけで目標を超える場合は最小限に
+            k = lo
+        else:
+            for _ in range(80):  # 二分法（med は k について単調増加）
+                mid = np.sqrt(lo * hi)
+                lo, hi = (mid, hi) if med(mid) < target else (lo, mid)
+            k = np.sqrt(lo * hi)
+        for i in auto_idx:
+            priors[i]["median"] *= k
+            priors[i]["calibration"] = k
 
     def build(self, train_mask: np.ndarray):
         import pymc as pm

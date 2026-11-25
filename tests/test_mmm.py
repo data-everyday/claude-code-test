@@ -94,7 +94,9 @@ def test_config_validation(tmp_path):
     pri = BayesianMMM(cfg, md0).roi_priors()
     assert pri[0]["source"] == "channel" and pri[0]["median"] == 1.5
     expected = 0.2 * md0.y.sum() / md0.spend.sum()
-    assert pri[1]["median"] == pytest.approx(expected) and pri[1]["sd"] == 1.0
+    # auto は「広告貢献シェアの事前中央値 = ad_share」になるよう一律に補正される
+    assert pri[1]["median"] == pytest.approx(expected * pri[1]["calibration"]) and pri[1]["sd"] == 1.0
+    assert 0 < pri[1]["calibration"] <= 1
     cfg2 = load_config(_write_cfg(tmp_path, "model: {adstock_max_lag: 6, default_roi_prior: null}"))
     assert cfg2.default_roi is None
     cfg3 = load_config(_write_cfg(tmp_path, "model: {default_roi_prior: {median: 2.0, sd: 0.5}}"))
@@ -364,7 +366,13 @@ def test_interval_and_prior_media_share(tmp_path):
     df = pd.read_csv(tmp_path / "d.csv")
     md = build_model_data(validate_dataframe(df, cfg), cfg)
     ps = analysis.prior_media_share(md, BayesianMMM(cfg, md))
-    assert ps["median"] == pytest.approx(0.2, rel=0.1)  # 全チャネル共通の中央値 → シェア中央値 ≈ 20%
+    assert ps["median"] == pytest.approx(0.2, rel=0.03)  # 事前の広告貢献シェアの中央値 = ad_share
+    # 幅が大きくても中央値は ad_share のまま（補正なしだと sd=1 で約 26% になる）
+    for sd in (1.0, 1.5):
+        cfg_w = load_config(path, {"model.default_roi_prior": {"ad_share": 0.2, "sd": sd}})
+        mw = BayesianMMM(cfg_w, md)
+        assert analysis.prior_media_share(md, mw)["median"] == pytest.approx(0.2, rel=0.03)
+        assert mw.roi_priors()[1]["calibration"] < 1
     assert ps["lo"] < 0.2 < ps["hi"]
     assert "広告貢献シェア" in describe_prior(str(path))
     analysis.set_interval(0.95)
