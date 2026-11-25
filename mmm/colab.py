@@ -99,7 +99,8 @@ def build_config(*, csv_path: str, date_column: str, target_column: str, channel
                  output_dir: str = "mmm_output", interval: float = 0.95,
                  value_per_kpi: float = 0, gross_margin: float = 1.0,
                  cpa_lines: list[float] | None = None, cpa_lines_auto: bool = True,
-                 cpa_lines_per_channel: str = "", **old_kwargs) -> dict:
+                 cpa_lines_per_channel: str = "", saturation_default: str = "auto",
+                 saturation_per_channel: str = "", **old_kwargs) -> dict:
     """フォーム値 → mmm_config.yaml と同じ構造の dict。CSV の列も検証する。"""
     if old_kwargs:
         raise ValueError(
@@ -109,6 +110,27 @@ def build_config(*, csv_path: str, date_column: str, target_column: str, channel
             "claude/laughing-albattani-3u9cqu/mmm_colab.ipynb"
             f"（不明な項目: {sorted(old_kwargs)}）")
     chs = parse_channels(channels)
+    # 飽和曲線の形: 媒体別の指定 > チャネル欄の 4 つ目の項目 > 全媒体の既定
+    sat_map = {}
+    txt = (saturation_per_channel or "").replace("＝", "=").replace("、", ",").replace("，", ",")
+    for item in [x.strip() for x in txt.split(",") if x.strip()]:
+        parts = [p.strip() for p in item.split("=")]
+        if len(parts) != 2 or parts[1].lower() not in ("auto", "c", "s"):
+            raise ValueError(f"曲線の形は「媒体名=auto / c / s」で入力してください（入力: {item}）")
+        sat_map[parts[0]] = parts[1].lower()
+    unknown = set(sat_map) - {c["name"] for c in chs}
+    if unknown:
+        raise ValueError(f"曲線の形の指定に、チャネルにない媒体名があります: {sorted(unknown)}")
+    default_sat = {"推定（auto）": "auto", "C字に固定（c）": "c", "S字に限定（s）": "s"}.get(
+        saturation_default, saturation_default)
+    if default_sat not in ("auto", "c", "s"):
+        raise ValueError(f"曲線の形の既定は auto / c / s のいずれかです（入力: {saturation_default}）")
+    explicit = {p[0] for p in _split(channels) if len(p) > 3 and p[3]}  # チャネル欄で形を書いた媒体
+    for c in chs:
+        if c["name"] in sat_map:
+            c["saturation"] = sat_map[c["name"]]
+        elif c["name"] not in explicit:
+            c["saturation"] = default_sat
     ctls = parse_controls(controls)
 
     cols = set(pd.read_csv(csv_path, nrows=1).columns)

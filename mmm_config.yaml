@@ -42,6 +42,9 @@ controls:
     sign: positive
 
 model:
+  # 飽和曲線の形の既定（チャネルごとの saturation が優先）:
+  #   auto = C 字か S 字かもデータから推定 / c = C 字に固定（S = 1）/ s = S 字に限定（S > 1）
+  saturation_default: auto
   adstock_max_lag: 13             # 最大ラグ（週）1〜20。効果の実際の長さは推定される減衰率で決まる
   # トレンド: none / linear（期間全体で 1 本の直線）/ changepoint（区分線形。一定間隔で傾きが変われる）
   trend: linear

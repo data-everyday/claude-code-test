@@ -262,13 +262,17 @@ def load_config(path: str | Path, overrides: dict[str, Any] | None = None) -> Co
 
     default_roi = parse_default_roi(_get(raw, "model.default_roi_prior", {"mode": "auto"}))
 
+    # 飽和曲線の形の既定（チャネルで saturation を書かなければこれ）: auto / c / s
+    sat_default = str(_get(raw, "model.saturation_default", "auto") or "auto").lower()
+    if sat_default not in SATURATION_TYPES:
+        raise ValueError(f"model.saturation_default は auto / c / s のいずれか: {sat_default}")
     channels = []
     for ch in _get(raw, "channels", []) or []:
         c = ChannelConfig(
             name=ch["name"],
             column=ch.get("column", ch["name"]),
             adstock=ch.get("adstock", "geometric"),
-            saturation=str(ch.get("saturation", "auto")).lower(),
+            saturation=str(ch.get("saturation", sat_default)).lower(),
             max_lag=ch.get("max_lag"),
             # LogNormal の中心は「中央値」。旧キー mean も受け付ける
             roi_prior_mean=_get(ch, "roi_prior.median", _get(ch, "roi_prior.mean")),

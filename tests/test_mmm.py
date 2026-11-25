@@ -279,6 +279,9 @@ def test_saturation_shape_options(tmp_path):
     S = fit.posterior["S"]
     assert np.all(S[:, 1] == 1.0)  # C 字固定
     assert np.all(S[:, 2] > 1.0)  # S 字限定
+    # 既定を c に → saturation を書いていない tv が c、書いたチャネルはそのまま
+    cfg_d = load_config(path, {"model.saturation_default": "c"})
+    assert [c.saturation for c in cfg_d.channels] == ["c", "c", "s"]
     path.write_text(raw.replace("saturation: s", "saturation: z"))
     with pytest.raises(ValueError, match="saturation"):
         load_config(path)
@@ -501,3 +504,24 @@ def test_model_settings_and_params(tmp_path):
     ep = estimated_params(md, mmm, fit)
     assert list(ep["チャネル"]) == ["tv", "search", "social"]
     assert ep.loc[0, "adstock 型"] == "delayed" and ep.loc[1, "効果が半分になるまで（週）"] != "—"
+
+
+def test_colab_saturation_choice(tmp_path):
+    from mmm.colab import build_config
+
+    csv = tmp_path / "d.csv"
+    generate(60).to_csv(csv, index=False)
+    kw = dict(csv_path=str(csv), date_column="date", target_column="sales",
+              channels="tv:tv_spend:delayed, search:search_spend:geometric:s, social:social_spend")
+    sat = lambda d: {c["name"]: c["saturation"] for c in d["channels"]}
+    assert sat(build_config(**kw)) == {"tv": "auto", "search": "s", "social": "auto"}
+    # 既定を C 字に → チャネル欄で書いた search 以外が c
+    assert sat(build_config(**kw, saturation_default="C字に固定（c）")) == {
+        "tv": "c", "search": "s", "social": "c"}
+    # 媒体別の指定が最優先
+    assert sat(build_config(**kw, saturation_default="c", saturation_per_channel="tv=s, search=c")) == {
+        "tv": "s", "search": "c", "social": "c"}
+    with pytest.raises(ValueError, match="チャネルにない媒体名"):
+        build_config(**kw, saturation_per_channel="radio=c")
+    with pytest.raises(ValueError, match="auto / c / s"):
+        build_config(**kw, saturation_per_channel="tv=x")
