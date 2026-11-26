@@ -58,7 +58,7 @@ def run_scenarios(md: ModelData, mmm: BayesianMMM, posterior: dict, scenarios: l
         name = sc.get("name") or f"scenario_{k + 1}"
         weeks = min(int(sc.get("period_weeks") or default_weeks or T), T)
         window = np.arange(T - weeks, T)
-        cur_spend = md.spend[window].sum(axis=0)
+        cur_spend = md.cost[window].sum(axis=0)  # 金額（倍率は出稿量にかけ、金額も同じ倍率で変わると仮定）
         m = _multipliers({**sc, "name": name}, names, cur_spend)
 
         if weeks not in base_cache:

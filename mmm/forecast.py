@@ -95,26 +95,48 @@ def run_forecast(cfg, md: ModelData, mmm: BayesianMMM, posterior: dict, plan: di
     names = md.channel_names
     C, T = len(names), len(md.y)
 
-    # ---- 出稿計画（金額）----
-    totals, rows = np.zeros(C), []
+    # ---- 出稿計画 ----
+    # totals = モデルへの入力（出稿量。GRP で推定したチャネルは GRP、それ以外は金額）、costs = 金額
+    totals, costs, rows = np.zeros(C), np.zeros(C), []
     grp_info = {}
     for i, ch in enumerate(names):
         pattern, src = weekly_pattern(md, i, fdates)
         g = (plan.get("grp") or {}).get(ch)
-        if g:
+        unit = md.units[i]
+        ly_act = last_year_total(md, i, fdates)
+        if unit:  # GRP などの出稿量でモデルを作ったチャネル
+            cpu = float(g.get("cost_per_grp") or md.cpu[i]) if g else float(md.cpu[i])
+            if g:
+                totals[i] = float(g["total"])
+                how = f"合計 {totals[i]:,.0f} {unit}（入力）"
+                grp_info[ch] = {"total_grp": totals[i], "cost_per_grp": cpu, "column": cfg.channels[i].column,
+                                "cpg_source": "指定" if g.get("cost_per_grp") else "実績から計算", "unit": unit}
+            elif ch in (plan.get("spend") or {}):
+                totals[i] = float(plan["spend"][ch]) / cpu
+                how = f"入力した金額 ÷ 1{unit} {cpu:,.0f}"
+            else:
+                totals[i] = ly_act
+                how = f"前年同期の実績（{ly_act:,.0f} {unit}、未入力）"
+            costs[i] = totals[i] * cpu
+        elif g:  # 金額でモデルを作ったチャネルを GRP で計画する場合は、1 GRP あたりの費用で金額に換算
+            if not g.get("cost_per_grp") and not g.get("column"):
+                raise ValueError(f"{ch} は金額でモデルを作っているため、GRP で計画するには GRP の列名か "
+                                 "1 GRP あたりの費用を指定してください")
             cpg = g.get("cost_per_grp") or cost_per_grp(df_full, cfg.channels[i].column, g["column"])
-            totals[i] = float(g["total"]) * cpg
+            totals[i] = costs[i] = float(g["total"]) * cpg
             grp_info[ch] = {"total_grp": float(g["total"]), "cost_per_grp": cpg, "column": g["column"],
-                            "cpg_source": "指定" if g.get("cost_per_grp") else "実績から計算"}
+                            "cpg_source": "指定" if g.get("cost_per_grp") else "実績から計算", "unit": "GRP"}
             how = f"合計 {float(g['total']):,.0f} GRP × 1GRP {cpg:,.0f}（{grp_info[ch]['cpg_source']}）"
         elif ch in (plan.get("spend") or {}):
-            totals[i] = float(plan["spend"][ch])
+            totals[i] = costs[i] = float(plan["spend"][ch])
             how = "入力した金額"
         else:
-            totals[i] = last_year_total(md, i, fdates)
+            totals[i] = costs[i] = ly_act
             how = "前年同期の実績額（未入力）"
-        rows.append({"channel": ch, "planned_spend": totals[i], "how": how, "weekly_pattern": src,
-                     "last_year_same_period": last_year_total(md, i, fdates), "_pattern": pattern})
+        ly_cost = ly_act * md.cpu[i] if unit else ly_act
+        rows.append({"channel": ch, "planned_spend": costs[i],
+                     "planned_activity": totals[i] if unit else np.nan, "unit": unit,
+                     "how": how, "weekly_pattern": src, "last_year_same_period": ly_cost, "_pattern": pattern})
     plan_tbl = pd.DataFrame(rows)
 
     rng = np.random.default_rng(seed)
@@ -190,16 +212,16 @@ def run_forecast(cfg, md: ModelData, mmm: BayesianMMM, posterior: dict, plan: di
         "kpi_total_lo": float(np.quantile(tot_kpi, lo_q)), "kpi_total_hi": float(np.quantile(tot_kpi, hi_q)),
         "media_total_mean": float(np.median(media_tot)),
         "media_total_lo": float(np.quantile(media_tot, lo_q)), "media_total_hi": float(np.quantile(media_tot, hi_q)),
-        "planned_spend_total": float(totals.sum()), "trend": trend_mode,
+        "planned_spend_total": float(costs.sum()), "trend": trend_mode,
     }
     ch_rows = []
     for i, ch in enumerate(names):
         v = contrib[:, :, i].sum(axis=1) * ys
         vm = float(np.median(v))
-        ch_rows.append({"channel": ch, "planned_spend": totals[i],
+        ch_rows.append({"channel": ch, "planned_spend": costs[i],
                         "contribution_mean": vm, "contribution_lo": float(np.quantile(v, lo_q)),
                         "contribution_hi": float(np.quantile(v, hi_q)),
-                        "cpa": float(totals[i] / vm) if vm > 0 else np.nan})
+                        "cpa": float(costs[i] / vm) if vm > 0 else np.nan})
     by_channel = pd.DataFrame(ch_rows)
 
     # ---- GRP（または金額）の水準比較 ----
@@ -216,7 +238,7 @@ def run_forecast(cfg, md: ModelData, mmm: BayesianMMM, posterior: dict, plan: di
             mu2 = (level + season + ctl.sum(axis=2) + c2.sum(axis=2)) * ys
             ch_c = c2[:, :, i].sum(axis=1) * ys
             k_tot = mu2.sum(axis=1)
-            crow.append({"multiplier": m, "spend": tv[i],
+            crow.append({"multiplier": m, "spend": costs[i] * m,
                          "grp": grp_info[target]["total_grp"] * m if target in grp_info else np.nan,
                          "channel_contribution": float(np.median(ch_c)),
                          "channel_contribution_lo": float(np.quantile(ch_c, lo_q)),

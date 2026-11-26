@@ -26,7 +26,9 @@ def optimize_budget(md: ModelData, mmm: BayesianMMM, fit: FitResult, opt_cfg: di
     names = md.channel_names
     C = len(names)
 
-    cur_spend = md.spend[window].sum(axis=0)
+    # 倍率はモデルへの入力（GRP など）にかけ、予算は金額で扱う（1 単位あたりの費用は一定と仮定）
+    cur_spend = md.cost[window].sum(axis=0)  # 金額
+    cur_act = md.spend[window].sum(axis=0)  # 出稿量
     if (cur_spend == 0).any():
         zero = [n for n, s in zip(names, cur_spend) if s == 0]
         log.warning("対象期間に支出 0 のチャネルがあり、倍率最適化の対象外になります: %s", zero)
@@ -80,6 +82,9 @@ def optimize_budget(md: ModelData, mmm: BayesianMMM, fit: FitResult, opt_cfg: di
         "upper_bound": ub,
         "current_contribution": np.median(base_draws, axis=0),
         "optimal_contribution": np.median(opt_draws, axis=0),
+        "unit": md.units,
+        "current_activity": np.where([bool(u) for u in md.units], cur_act, np.nan),
+        "optimal_activity": np.where([bool(u) for u in md.units], cur_act * m_opt, np.nan),
     })
     table["spend_change_pct"] = (table["multiplier"] - 1) * 100
     return {
@@ -109,7 +114,9 @@ def minimize_spend(md: ModelData, mmm: BayesianMMM, fit: FitResult, opt_cfg: dic
     window = np.arange(T - weeks, T)
     names = md.channel_names
     C = len(names)
-    cur_spend = md.spend[window].sum(axis=0)
+    # 倍率はモデルへの入力（GRP など）にかけ、予算は金額で扱う（1 単位あたりの費用は一定と仮定）
+    cur_spend = md.cost[window].sum(axis=0)  # 金額
+    cur_act = md.spend[window].sum(axis=0)  # 出稿量
 
     lb = np.full(C, float(opt_cfg.get("lower_bound", 0.7)))
     ub = np.full(C, float(opt_cfg.get("upper_bound", 1.3)))
@@ -167,6 +174,9 @@ def minimize_spend(md: ModelData, mmm: BayesianMMM, fit: FitResult, opt_cfg: dic
         "upper_bound": ub,
         "current_contribution": np.median(base_draws, axis=0),
         "optimal_contribution": np.median(opt_draws, axis=0),
+        "unit": md.units,
+        "current_activity": np.where([bool(u) for u in md.units], cur_act, np.nan),
+        "optimal_activity": np.where([bool(u) for u in md.units], cur_act * m_opt, np.nan),
     })
     table["spend_change_pct"] = (table["multiplier"] - 1) * 100
     cur_total, new_total = float(cur_spend.sum()), float((cur_spend * m_opt).sum())

@@ -53,6 +53,31 @@ def smart_num(v) -> str:
     return f"{v:.3g}"
 
 
+_UNITS: dict = {}  # チャネル → 出稿量の単位（GRP など。金額で入れるチャネルは ""）
+_CPU: dict = {}  # チャネル → 出稿量 1 単位あたりの費用
+
+
+def set_units(summ: pd.DataFrame) -> None:
+    _UNITS.clear()
+    _CPU.clear()
+    if "unit" in summ:
+        _UNITS.update(dict(zip(summ["channel"], summ["unit"].fillna(""))))
+        _CPU.update(dict(zip(summ["channel"], summ["cost_per_unit"])))
+
+
+def xunit(ch: str, money: str = "spend") -> str:
+    """グラフの横軸の単位（GRP のチャネルは "GRP"、金額のチャネルは money）。"""
+    return _UNITS.get(ch) or money
+
+
+def act(v, ch: str) -> str:
+    """出稿量の表示。GRP のチャネルは「120 GRP（≈1,200万円）」、金額のチャネルはそのまま。"""
+    u = _UNITS.get(ch)
+    if not u:
+        return smart_num(v)
+    return f"{smart_num(v)} {u}（≈{jp_num(v * _CPU[ch])}円）"
+
+
 def per_spend(roi: float, unit: str) -> str:
     """ROI（KPI ÷ 広告費）を「広告費 ○ あたり +△」の形に（△ が 1 以上になる最小の単位で）。"""
     for mult, label in ((1, "1"), (1e3, "1,000"), (1e4, "1万"), (1e5, "10万"), (1e6, "100万"),
@@ -166,23 +191,29 @@ def _short_money(v: float) -> str:
     """グラフ内ラベル用（日本語フォント非依存）: 30000 → 30k、1500000 → 1,500k。"""
     if v >= 1e3:
         return f"{v / 1e3:,.0f}k"
-    return f"{v:,.0f}"
+    return f"{v:,.0f}" if v >= 10 else f"{v:.2g}"
 
 
 LIGHT_BLUE = "#7cc4f0"  # 貢献（contribution）を表す色
 
 
-def fig_share(summ: pd.DataFrame) -> str:
-    """媒体ごとに 出稿割合（ネイビー, 合計 100%）と KPI 貢献割合（水色, 合計 = 広告貢献シェア）を並べる。"""
+def fig_share(summ: pd.DataFrame, normalized: bool = False) -> str:
+    """媒体ごとに 出稿割合（ネイビー, 合計 100%）と 貢献割合（水色）を並べる。
+    normalized=True: 広告による増分の合計を 100% とした各チャネルの割合、False: KPI 全体に対する割合。"""
     n = len(summ)
     y = np.arange(n)
     h = 0.38
     sp = summ["spend_share"].to_numpy() * 100
-    ct = summ["contribution_share"].to_numpy() * 100
+    if normalized:
+        c = summ["contribution_mean"].to_numpy(dtype=float)
+        ct = c / c.sum() * 100 if c.sum() > 0 else np.zeros(n)
+        clabel = "Share of ad-driven contribution (total 100%)"
+    else:
+        ct = summ["contribution_share"].to_numpy() * 100
+        clabel = f"Contribution to total KPI (total {ct.sum():.1f}%)"
     fig, ax = plt.subplots(figsize=(8, 0.75 * n + 1.4))
     ax.barh(y - h / 2, sp, height=h, color=NAVY, label="Share of spend (total 100%)")
-    ax.barh(y + h / 2, ct, height=h, color=LIGHT_BLUE,
-            label=f"Contribution to total KPI (total {ct.sum():.1f}%)")
+    ax.barh(y + h / 2, ct, height=h, color=LIGHT_BLUE, label=clabel)
     for i in range(n):
         ax.text(sp[i], y[i] - h / 2, f" {sp[i]:.1f}%", va="center", fontsize=8.5)
         ax.text(ct[i], y[i] + h / 2, f" {ct[i]:.1f}%", va="center", fontsize=8.5)
@@ -321,9 +352,9 @@ def fig_response(curves: pd.DataFrame, summ: pd.DataFrame) -> str:
                         alpha=0.2)
         ax.plot(d["spend"], d["contribution_mean"], color=color, lw=1.6)
         cur = summ.loc[summ["channel"] == ch].iloc[0]
-        ax.axvline(cur["spend"], color="#222", ls=":", lw=1)
+        ax.axvline(cur["activity"] if cur.get("unit") else cur["spend"], color="#222", ls=":", lw=1)
         ax.set_title(ch, fontsize=10)
-        ax.set_xlabel("total spend over the period", fontsize=8)
+        ax.set_xlabel(f"total {xunit(ch)} over the period", fontsize=8)
         ax.set_ylabel("total incremental KPI", fontsize=8)
         ax.tick_params(labelsize=7)
         ax.spines[["top", "right"]].set_visible(False)
@@ -403,8 +434,8 @@ def fig_weekly_saturation(curve: pd.DataFrame, points: pd.DataFrame, chans: list
                     ax.text(xv, ybot * 0.03, f" CPA {_short_money(r['cpa'])}", fontsize=7,
                             color=CPA_COLOR, rotation=90, va="bottom", ha="right")
         ax.set_title(ch, fontsize=10)
-        ax.set_xlabel("weekly effective spend (after adstock)" if xcol == "effective_spend"
-                      else "weekly spend", fontsize=8)
+        ax.set_xlabel(f"weekly effective {xunit(ch)} (after adstock)" if xcol == "effective_spend"
+                      else f"weekly {xunit(ch)}", fontsize=8)
         ax.set_ylabel("weekly contribution" if xcol == "effective_spend"
                       else "contribution incl. carryover", fontsize=8)
         ax.tick_params(labelsize=7)
@@ -457,7 +488,7 @@ def fig_efficiency_zones(curve: pd.DataFrame, points: pd.DataFrame, chans: list[
                        label="inflection point (S-shape: steepest = most efficient)" if not labeled else None)
             labeled = True
         ax.set_title(f"{ch}  (S-shape)" if z["s_shape"] else ch, fontsize=10)
-        ax.set_xlabel("weekly spend", fontsize=8)
+        ax.set_xlabel(f"weekly {xunit(ch)}", fontsize=8)
         ax.set_ylabel("contribution incl. carryover", fontsize=8)
         ax.tick_params(labelsize=7)
         ax.spines[["top", "right"]].set_visible(False)
@@ -534,6 +565,11 @@ table.tbl th,table.tbl td{padding:6px 10px;border-bottom:1px solid var(--line);t
 table.tbl th:first-child,table.tbl td:first-child{text-align:left}
 table.tbl th{background:var(--card)}
 table.tbl.tl th,table.tbl.tl td{text-align:left!important}
+nav.toc{margin:14px 0 0;font-size:.9rem}nav.toc a{color:#1b2a4a}
+section.appendix{background:#eef0f3;border-top:4px solid #8a93a3;margin:56px -16px 0;padding:8px 16px 40px}
+section.appendix .kpi,section.appendix table.tbl th{background:#e2e5ea}
+section.appendix img{background:#fff;border-radius:6px}
+.app-title{font-size:1.4rem;margin:24px 0 4px}
 """
 
 
@@ -556,6 +592,7 @@ def build_report(path, *, cfg, summ, dec, pred, metrics, curves, decay, diagnost
                  ext_cols: list | None = None,
                  zones: pd.DataFrame | None = None) -> None:
     IL = interval_label()
+    set_units(summ)
     hero_html = ""  # 冒頭で目立たせる「広告による増分のシェア」（下で total_kpi 等の計算後に作成）
     prior_html = ""
     if prior_share:
@@ -587,6 +624,9 @@ def build_report(path, *, cfg, summ, dec, pred, metrics, curves, decay, diagnost
         f'= 広告による増分 {jp_num(total_contrib, U)} ÷ {K}の合計 {jp_num(total_kpi, U)}（全 {weeks} 週、'
         f'対象チャネル {len(channels)}）</div></div>')
 
+    diag_short = (f'<div class="warn">⚠ 収束診断で注意点が {len(diagnostics["warnings"])} 件あります（詳細は Appendix）</div>'
+                  if diagnostics["warnings"] else
+                  '<div class="ok">✓ 収束診断に問題はありません（詳細は Appendix）</div>')
     diag_html = ""
     if diagnostics["warnings"]:
         diag_html += "".join(f'<div class="warn">⚠ {html.escape(w)}</div>'
@@ -670,6 +710,9 @@ def build_report(path, *, cfg, summ, dec, pred, metrics, curves, decay, diagnost
         f"限界：{per}": summ["marginal_roi"] * mult,
         f"CPA（増分 1{cfg.kpi_unit or '単位'}あたり広告費）": summ["cpa"],
     })
+    if summ["unit"].astype(bool).any():
+        roi_view.insert(2, "出稿量（GRP など）", [f"{smart_num(a)} {u}" if u else "—"
+                                              for a, u in zip(summ["activity"], summ["unit"])])
     roi_fmt = {"広告費": smart_num, "出稿シェア": "{:.1%}", f"増分{cfg.kpi_name}": smart_num,
                "貢献シェア": "{:.1%}", f"{per}の増分": smart_num, f"限界：{per}": smart_num,
                f"CPA（増分 1{cfg.kpi_unit or '単位'}あたり広告費）": smart_num}
@@ -732,10 +775,10 @@ def build_report(path, *, cfg, summ, dec, pred, metrics, curves, decay, diagnost
             + '<h3>週次の貢献（変数別）</h3>'
             + fig_control_weekly(cw, list(cs["variable"])))
 
-    settings_html = ""
+    settings_html = settings_app_html = ""
     if settings:
         settings_html = (
-            '<h2>モデルの設定（使用した変数・関数・事前分布）</h2>'
+            '<h2>モデルの設定（使用した変数・関数）</h2>'
             '<h3>目的変数</h3>' + f'<div class="scroll">{_table(settings["target"], left=True)}</div>'
             + '<h3>説明変数：広告チャネル</h3><p class="muted">各チャネルの広告費は '
             '<b>adstock</b>（持ち越し効果）→ <b>ヒル関数</b>（飽和）の順に変換してからモデルに入れています。'
@@ -748,7 +791,10 @@ def build_report(path, *, cfg, summ, dec, pred, metrics, curves, decay, diagnost
             + '<h3>説明変数：広告以外</h3>'
             + (f'<div class="scroll">{_table(settings["others"], left=True)}</div>' if len(settings["others"])
                else '<p class="muted">なし</p>')
-            + '<h3>事前分布</h3><p class="muted">KPI は平均 = 1、広告費はチャネルの最大 = 1、'
+            + '<p class="muted">事前分布と推定の設定は Appendix にあります。</p>')
+        settings_app_html = (
+            '<h2>モデルの設定（事前分布・推定の設定）</h2>'
+            '<h3>事前分布</h3><p class="muted">KPI は平均 = 1、広告費はチャネルの最大 = 1、'
             'コントロール変数は平均 0・標準偏差 1 にスケールしたうえでの値です。</p>'
             + f'<div class="scroll">{_table(settings["priors"], left=True)}</div>'
             + '<h3>推定の設定</h3>' + f'<div class="scroll">{_table(settings["run"], left=True)}</div>')
@@ -761,6 +807,15 @@ def build_report(path, *, cfg, summ, dec, pred, metrics, curves, decay, diagnost
             '半飽和点 K = 効果が上限の半分になる週次出稿額（毎週同じ額を出す場合）。'
             '形 S が 1 より大きいと S 字（少額では効きにくい）、1 以下だと C 字（最初から効きが鈍っていく）。</p>'
             + f'<div class="scroll">{_table(params, left=True)}</div>')
+
+    def _opt_view(t: pd.DataFrame) -> pd.DataFrame:
+        """GRP のチャネルがなければ出稿量の列を外し、あれば「120 GRP」の形にする。"""
+        t = t.copy()
+        if not t["unit"].astype(bool).any():
+            return t.drop(columns=["unit", "current_activity", "optimal_activity"])
+        for c in ("current_activity", "optimal_activity"):
+            t[c] = [f"{v:,.0f} {u}" if u else "—" for v, u in zip(t[c], t["unit"])]
+        return t.drop(columns=["unit"])
 
     opt_html = ""
     if opt:
@@ -780,7 +835,7 @@ def build_report(path, *, cfg, summ, dec, pred, metrics, curves, decay, diagnost
 <div class="kpi"><span>改善がプラスの確率</span><b>{opt['prob_uplift_positive']:.0%}</b></div>
 </div>
 {'' if opt['success'] else '<div class="warn">⚠ 最適化ソルバーが収束しませんでした。結果は参考値です</div>'}
-<div class="scroll">{_table(opt['table'], ofmt)}</div>
+<div class="scroll">{_table(_opt_view(opt['table']), ofmt)}</div>
 {fig_opt(opt['table'])}
 """
     if opt and opt_min:
@@ -805,7 +860,7 @@ def build_report(path, *, cfg, summ, dec, pred, metrics, curves, decay, diagnost
 <div class="kpi"><span>増分{K}の変化（{IL}区間）</span><b>{m['kpi_change_mean']:+,.0f}</b><span>[{m['kpi_change_lo']:+,.0f}, {m['kpi_change_hi']:+,.0f}]／目標以上の確率 {m['prob_kpi_not_lower']:.0%}</span></div>
 </div>
 {warn}
-<div class="scroll">{_table(m['table'], ofmt)}</div>
+<div class="scroll">{_table(_opt_view(m['table']), ofmt)}</div>
 {fig_opt(m['table'])}
 """
 
@@ -821,21 +876,21 @@ def build_report(path, *, cfg, summ, dec, pred, metrics, curves, decay, diagnost
     if sat_levels is not None and len(sat_levels):
         def _rng(r, tag):
             v, lo, hi = r[f"spend_at_{tag}"], r[f"spend_at_{tag}_lo"], r[f"spend_at_{tag}_hi"]
-            out = f"{smart_num(v)}（{smart_num(lo)}〜{smart_num(hi)}）"
+            out = f"{act(v, r['channel'])}（{smart_num(lo)}〜{smart_num(hi)}）"
             return out + (" ※実績の範囲外" if v > r["max_weekly_spend"] else "")
         sv = pd.DataFrame({
             "チャネル": sat_levels["channel"],
             "最大効果の 25% に達する額": sat_levels.apply(lambda r: _rng(r, "25"), axis=1),
             "50%（半飽和点）": sat_levels.apply(lambda r: _rng(r, "50"), axis=1),
             "75%": sat_levels.apply(lambda r: _rng(r, "75"), axis=1),
-            "実績の最大週次出稿額": sat_levels["max_weekly_spend"],
+            "実績の最大週次出稿額": [act(v, c) for v, c in zip(sat_levels["max_weekly_spend"], sat_levels["channel"])],
         })
         sat_html = (
             '<h3>飽和度の目安（最大効果の 25% / 50% / 75% に達する週次出稿額）</h3><p class="muted">'
             '「最大効果」は、出稿を増やし続けたときに曲線が行き着く上限（1 週あたり）です。'
             'グラフの点線（25% / 50% / 75%）が各割合に達する週次出稿額で、グラフに描いた曲線（推定の中央値）から計算しています。'
             '上限は外挿した値のため、実績の最大出稿額を超える到達額（※実績の範囲外）は不確実で、区間も広くなります。</p>'
-            + f'<div class="scroll">{_table(sv, {"実績の最大週次出稿額": smart_num})}</div>')
+            + f'<div class="scroll">{_table(sv)}</div>')
 
     cpa_html = ""
     if cpa_levels is not None and len(cpa_levels):
@@ -846,14 +901,14 @@ def build_report(path, *, cfg, summ, dec, pred, metrics, curves, decay, diagnost
             if not np.isfinite(v):
                 return "実績の 5 倍以上"
             hi = "5 倍以上" if not np.isfinite(r["spend_at_cpa_hi"]) else smart_num(r["spend_at_cpa_hi"])
-            out = f"{smart_num(v)}（{smart_num(r['spend_at_cpa_lo'])}〜{hi}）"
+            out = f"{act(v, r['channel'])}（{smart_num(r['spend_at_cpa_lo'])}〜{hi}）"
             if v < r["max_weekly_spend"] * MIN_LINE_RATIO:
                 return out + " ※データの少ない範囲（グラフには描かない）"
             return out + (" ※実績の範囲外" if v > r["max_weekly_spend"] else "")
 
         cv = pd.DataFrame({
             "チャネル": cpa_levels["channel"],
-            "平均 CPA": [f"{c / 1e4:g}万円" if c >= 1e4 else f"{c:,.0f}円" for c in cpa_levels["cpa"]],
+            "平均 CPA": [f"{c / 1e4:g}万円" if c >= 1e4 else f"{smart_num(c)}円" for c in cpa_levels["cpa"]],
             "線の決め方": cpa_levels["source"],
             "その CPA に達する週次出稿額（区間）": cpa_levels.apply(_cpa_txt, axis=1),
             "グラフ内の表記": [f"CPA {_short_money(c)}" for c in cpa_levels["cpa"]],
@@ -865,9 +920,9 @@ def build_report(path, *, cfg, summ, dec, pred, metrics, curves, decay, diagnost
             '「届かない」= どの出稿額でも平均 CPA がその金額より高い。</p>'
             f'<div class="scroll">{_table(cv)}</div>')
 
-    weekly_html = ""
+    weekly_html = weekly_app_html = ""
     if weekly_curve is not None and weekly_points is not None:
-        weekly_html = (f'<h2>週次の飽和曲線（横軸＝その週の出稿額）</h2><p class="muted">'
+        weekly_app_html = (f'<h2>週次の飽和曲線（横軸＝その週の出稿額）</h2><p class="muted">'
                        f'横軸 = 1 週間の出稿額、縦軸 = その週の出稿が生む増分{K}の合計（出稿した週だけでなく、'
                        f'持ち越し（adstock）で翌週以降に出る効果も含む）。線は推定した飽和曲線（帯は {IL} 区間）、'
                        '〇は実績の各週の出稿額を曲線に当てはめた位置で、すべて曲線上に並びます。'
@@ -883,6 +938,9 @@ def build_report(path, *, cfg, summ, dec, pred, metrics, curves, decay, diagnost
                                                optimal_line, cfg.economics, xcol="spend",
                                                sat=sat_levels)
                        + sat_html)
+        weekly_html = ('' if optimal_line is not None else
+                       '<div class="warn">最適な出稿ライン（限界利益ROI = 1）は、採算が未入力のため表示していません。'
+                       'Colab の③「採算（任意）」で「KPI 1 単位の金額」と「粗利率」を入力すると表示されます。</div>')
         if cpa_levels is not None and len(cpa_levels):
             weekly_html += (
                 f'<h2>週次の飽和曲線と平均 CPA ライン（横軸＝その週の出稿額）</h2><p class="muted">'
@@ -899,19 +957,20 @@ def build_report(path, *, cfg, summ, dec, pred, metrics, curves, decay, diagnost
                                         xcol="spend", cpa=cpa_levels)
                 + cpa_html)
         if zones is not None and len(zones):
-            def _z(v, mx):
+            def _z(v, mx, ch):
                 if not np.isfinite(v):
                     return "曲線の範囲外"
-                return f"{smart_num(v)}（実績最大の {v / mx:.0%}）" + (" ※実績の範囲外" if v > mx else "")
+                return f"{act(v, ch)}（実績最大の {v / mx:.0%}）" + (" ※実績の範囲外" if v > mx else "")
+            zc = zones["channel"]
             zv = pd.DataFrame({
                 "チャネル": zones["channel"],
                 "曲線の形": ["S 字" if s_ else "C 字" for s_ in zones["s_shape"]],
-                "変曲点（S 字：効率が最も良い点）": [(_z(v, m) if s_ else "—（C 字は出稿 0 が最も効率的）")
-                                         for v, m, s_ in zip(zones["inflection"], zones["max_weekly_spend"],
-                                                             zones["s_shape"])],
-                "最大効果の 1/3 に達する額": [_z(v, m) for v, m in zip(zones["spend_at_third"], zones["max_weekly_spend"])],
-                "最大効果の 2/3 に達する額": [_z(v, m) for v, m in zip(zones["spend_at_two_thirds"], zones["max_weekly_spend"])],
-                "実績の最大週次出稿額": zones["max_weekly_spend"],
+                "変曲点（S 字：効率が最も良い点）": [(_z(v, m, c) if s_ else "—（C 字は出稿 0 が最も効率的）")
+                                         for v, m, s_, c in zip(zones["inflection"], zones["max_weekly_spend"],
+                                                                zones["s_shape"], zc)],
+                "最大効果の 1/3 に達する額": [_z(v, m, c) for v, m, c in zip(zones["spend_at_third"], zones["max_weekly_spend"], zc)],
+                "最大効果の 2/3 に達する額": [_z(v, m, c) for v, m, c in zip(zones["spend_at_two_thirds"], zones["max_weekly_spend"], zc)],
+                "実績の最大週次出稿額": [act(v, c) for v, c in zip(zones["max_weekly_spend"], zc)],
             })
             weekly_html += (
                 '<h2>週次の飽和曲線と効率の 3 段階（最大効果の 1/3・2/3）</h2><p class="muted">'
@@ -925,8 +984,8 @@ def build_report(path, *, cfg, summ, dec, pred, metrics, curves, decay, diagnost
                 'S 字では曲線の傾きが最も急な<b>変曲点</b>（一点鎖線）が効率の最も良い点で、少なくともそこまでは出稿しないと効率が出ません。'
                 '線の位置はグラフに描いた曲線（推定の中央値）から計算しています。毎週同じ額を出稿し続ける前提の値です。</p>'
                 + fig_efficiency_zones(weekly_curve, weekly_points, channels, zones)
-                + f'<div class="scroll">{_table(zv, {"実績の最大週次出稿額": smart_num})}</div>')
-        weekly_html += ('<h2>週次の飽和曲線と実績（横軸＝adstock 後の出稿額）</h2><p class="muted">横軸 = その週に効いている出稿額'
+                + f'<div class="scroll">{_table(zv)}</div>')
+        weekly_app_html += ('<h2>週次の飽和曲線と実績（横軸＝adstock 後の出稿額）</h2><p class="muted">横軸 = その週に効いている出稿額'
                        '（adstock 適用後。過去の出稿の持ち越しを含み、単位は出稿額と同じ）、縦軸 = その週の貢献。'
                        f'線は推定した飽和曲線（帯は {IL} 区間）、〇は実績の各週。〇が曲線の平らな部分に多いほど、'
                        '出稿が飽和気味であることを示します（〇は曲線から計算した値なので曲線上に並びます。'
@@ -943,22 +1002,23 @@ def build_report(path, *, cfg, summ, dec, pred, metrics, curves, decay, diagnost
                 if r["optimal_weekly_spend"] == 0:
                     return "0（出稿しない方が利益）"
                 hi = "5 倍以上" if not np.isfinite(r["optimal_hi"]) else f"{r['optimal_hi']:,.0f}"
-                return f"{r['optimal_weekly_spend']:,.0f}（{r['optimal_lo']:,.0f}〜{hi}）"
+                return f"{act(r['optimal_weekly_spend'], r['channel'])}（{r['optimal_lo']:,.0f}〜{hi}）"
             ol["最適な週次出稿額（区間）"] = ol.apply(_opt_txt, axis=1)
+            ol["current_weekly_spend"] = [act(v, c) for v, c in zip(ol["current_weekly_spend"], ol["channel"])]
             ol = ol.rename(columns={"channel": "チャネル", "current_weekly_spend": "現在の平均週次出稿額",
                                     "avg_profit_roi": "平均利益ROI", "marginal_profit_roi_now": "現在の限界利益ROI",
                                     "prob_marginal_above_1": "限界ROI>1 の確率", "judgement": "判定"})
             ol = ol[["チャネル", "現在の平均週次出稿額", "最適な週次出稿額（区間）", "平均利益ROI",
                      "現在の限界利益ROI", "限界ROI>1 の確率", "判定"]]
             weekly_html += (
-                f'<h3>利益から見た最適な出稿ライン</h3><p class="muted">KPI 1 単位の金額 {e["value_per_kpi"]:,.4g} × '
+                f'<h2>利益から見た最適な出稿ライン</h2><p class="muted">KPI 1 単位の金額 {e["value_per_kpi"]:,.4g} × '
                 f'粗利率 {e["gross_margin"]:.0%} = 粗利 {e["value_per_kpi"] * e["gross_margin"]:,.4g} として計算。'
                 '<b>平均利益ROI</b> = これまでの出稿全体で、1 円あたりいくらの粗利を生んだか。'
                 '<b>限界利益ROI</b> = 出稿を 1 円増やしたとき増える粗利。最適な出稿額は「限界利益ROI = 1」の点'
-                '（それ以上増やすと、追加分は赤字）。グラフの縦線（濃紺）が最適点、薄い帯がその区間、'
+                '（それ以上増やすと、追加分は赤字）。Appendix の週次の飽和曲線のグラフでは、縦線（濃紺）が最適点、薄い帯がその区間、'
                 '点線が現在の平均週次出稿額、破線が損益分岐線（貢献の粗利 = 出稿額）。'
                 '毎週同じ額を出稿し続ける前提の目安で、予算に上限がある場合は「予算最適化」の配分を優先してください。</p>'
-                + f'<div class="scroll">{_table(ol, {"現在の平均週次出稿額": "{:,.0f}", "平均利益ROI": "{:.2f}", "現在の限界利益ROI": "{:.2f}", "限界ROI>1 の確率": "{:.0%}"})}</div>')
+                + f'<div class="scroll">{_table(ol, {"平均利益ROI": "{:.2f}", "現在の限界利益ROI": "{:.2f}", "限界ROI>1 の確率": "{:.0%}"})}</div>')
 
     scen_html = ""
     if scenarios is not None and len(scenarios):
@@ -987,6 +1047,7 @@ def build_report(path, *, cfg, summ, dec, pred, metrics, curves, decay, diagnost
 KPI（目的変数）{K}（列名 {html.escape(cfg.target_column)}）／ チャネル {len(channels)}<br>
 区間はベイズ信用区間（{IL}）：「真の値がこの範囲にある確率が {IL}」という意味です。
 広告貢献シェアの「事前の想定」は ROI 事前分布から計算した値で、推定結果がこれに近く区間も広い場合はデータより事前で決まっている可能性があります。</p>
+<nav class="toc">詳細（事前分布・収束診断・ベースライン・イベント・飽和曲線の詳細・パラメータなど）は <a href="#appendix">Appendix</a> にあります。</nav>
 {hero_html}
 <div class="kpis">
 <div class="kpi"><span>{K}の合計（全 {weeks} 週）</span><b>{jp_num(total_kpi, U)}</b><span>{total_kpi:,.0f}{U}。データの「{html.escape(cfg.target_column)}」列の合計（広告による増分＋広告以外の両方を含む）</span></div>
@@ -997,18 +1058,40 @@ KPI（目的変数）{K}（列名 {html.escape(cfg.target_column)}）／ チャ�
 
 {settings_html}
 
-<h2>収束診断</h2>{diag_html}
+<h2>収束診断</h2>{diag_short}
 
 <h2>予測精度（学習期間・テスト期間）</h2>
 {holdout_summary}
 
-<h2>{fit_title}</h2>
-{full_fit_html}
-{fig_fit(pred)}
-
 <h2>貢献度分解</h2>
 {decomp_note}
 {fig_decomp(dec, channels, ext_cols)}
+
+<h2>出稿割合と広告による増分{K}の内訳</h2>
+<p class="muted">ネイビー：広告費全体に占める各チャネルの出稿金額の割合（合計 100%）。
+水色：広告による増分{K}の合計（{K}全体の {ad_share:.1%}）を 100% としたときの、各チャネルの割合（合計 100%）。
+ネイビーに比べて水色が長いチャネルほど、費用対効果が高いことを示します。
+{K}全体に対する割合（合計 = 広告貢献シェア）のグラフは Appendix にあります。</p>
+{fig_share(summ, normalized=True)}
+
+<h2>チャネル別 ROI</h2>
+<p class="muted">ROI = 期間内の増分{K} ÷ 広告費。{roi_note}（数値の表は Appendix）</p>
+{fig_roi(summ, cfg.economics)}
+
+{weekly_html}
+{opt_html}
+{scen_html}
+
+<section class="appendix" id="appendix">
+<h1 class="app-title">Appendix</h1>
+<p class="muted">モデルの詳細・診断・補足のグラフと表です。</p>
+{settings_app_html}
+
+<h2>収束診断</h2>{diag_html}
+
+<h2>{fit_title}</h2>
+{full_fit_html}
+{fig_fit(pred)}
 
 {base_html}
 
@@ -1016,21 +1099,18 @@ KPI（目的変数）{K}（列名 {html.escape(cfg.target_column)}）／ チャ�
 
 {controls_html}
 
-<h2>出稿割合と{K}への貢献割合</h2>
+<h2>出稿割合と{K}全体への貢献割合</h2>
 <p class="muted">ネイビー：広告費全体に占める各チャネルの出稿金額の割合（合計 100%）。
-水色：{K}全体に占める各チャネルの貢献の割合。全チャネルの合計が広告貢献シェア（{ad_share:.1%}）になります。
-ネイビーに比べて水色が相対的に長いチャネルほど、費用対効果が高いことを示します（貢献の {IL} 区間は下の表の contribution_share_lo / hi）。</p>
+水色：{K}全体に占める各チャネルの貢献の割合。全チャネルの合計が広告貢献シェア（{ad_share:.1%}）になります（貢献の {IL} 区間は下の表の contribution_share_lo / hi）。</p>
 {fig_share(summ)}
 
-<h2>チャネル別 ROI</h2>
-<p class="muted">ROI = 期間内の増分{K} ÷ 広告費。CPA = 増分{K} 1{U or "単位"}あたりの広告費。限界 = 広告費を 1% 増やしたときの 追加{K} ÷ 追加広告費。広告効果は正に制約されています。
+<h2>チャネル別 ROI（表）</h2>
+<p class="muted">CPA = 増分{K} 1{U or "単位"}あたりの広告費。限界 = 広告費を 1% 増やしたときの 追加{K} ÷ 追加広告費。
 詳細表の roi_prior_median / roi_prior_sd は推定に使った ROI の事前分布で、事後の ROI がこれに近く区間も広いチャネルは、データより事前で決まっている可能性があります。</p>
-{fig_roi(summ, cfg.economics)}
-<p class="muted">{roi_note}</p>
 <div class="scroll">{_table(roi_view, roi_fmt)}</div>
 <details><summary>すべての列（事前分布・adstock・飽和曲線のパラメータなど）</summary><div class="scroll">{_table(summ, sfmt)}</div></details>
 
-{weekly_html}
+{weekly_app_html}
 
 <h2>期間合計の応答曲線（予算規模を変えたら？）</h2>
 <p class="muted">「分析期間（全 {weeks} 週）の各週の出稿を、すべて同じ倍率で増減していたら、期間全体で{K}がどれだけ増えていたか」を表します。
@@ -1043,8 +1123,7 @@ KPI（目的変数）{K}（列名 {html.escape(cfg.target_column)}）／ チャ�
 <h2>adstock（持越効果）とヒル関数のパラメータ</h2>
 {fig_adstock(decay)}
 {params_html}
-{opt_html}
-{scen_html}
+</section>
 </main></body></html>"""
     with open(path, "w", encoding="utf-8") as f:
         f.write(page)

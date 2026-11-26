@@ -688,5 +688,52 @@ def test_build_forecast_plan():
     assert p["grp"]["tv"] == {"total": 1500.0, "column": "tv_grp", "cost_per_grp": None}
     assert p["spend"] == {"youtube": 1e8} and p["controls"] == {"newmodel": 1.0}
     assert "grp" not in build_forecast_plan(weeks=4)
-    with pytest.raises(ValueError):
-        build_forecast_plan(weeks=4, grp_channel="tv", grp_total=10)
+    # GRP の列名は省略可（GRP でモデルを作ったチャネルは列名なしで計画できる）
+    assert build_forecast_plan(weeks=4, grp_channel="tv", grp_total=10)["grp"]["tv"]["column"] is None
+
+
+def test_activity_channel_grp(tmp_path):
+    """TV を GRP でモデル化し、金額（ROI・CPA・最適化）は広告費の列から計算する。"""
+    from mmm.colab import parse_channels
+    from mmm.forecast import run_forecast
+    from mmm.forecast_report import build_forecast_report
+    from mmm.pipeline import run
+
+    path = _write_cfg(tmp_path)
+    df = pd.read_csv(tmp_path / "d.csv")
+    df["tv_grp"] = df["tv_spend"] / 250.0  # 1 GRP = 250
+    df.to_csv(tmp_path / "d.csv", index=False)
+    txt = path.read_text().replace(
+        "{name: tv, column: tv_spend, adstock: delayed, roi_prior: {median: 1.5, sd: 0.5}}",
+        "{name: tv, column: tv_grp, spend_column: tv_spend, adstock: delayed}")
+    path.write_text(txt)
+    cfg = load_config(path)
+    tv = cfg.channels[0]
+    assert tv.is_activity and tv.unit == "GRP" and tv.spend_column == "tv_spend"
+    md = build_model_data(validate_dataframe(df, cfg), cfg)
+    assert md.cpu[0] == pytest.approx(250.0) and md.cpu[1] == 1.0
+    np.testing.assert_allclose(md.cost[:, 0], df["tv_spend"])
+    np.testing.assert_allclose(md.spend[:, 0], df["tv_grp"])
+
+    res = run(cfg)
+    summ = res["summary"].set_index("channel")
+    assert summ.loc["tv", "spend"] == pytest.approx(df["tv_spend"].sum())  # ROI の分母は金額
+    assert summ.loc["tv", "activity"] == pytest.approx(df["tv_grp"].sum())
+    assert summ.loc["tv", "roi_mean"] == pytest.approx(summ.loc["tv", "contribution_mean"] / summ.loc["tv", "spend"], rel=1e-6)
+    opt = res["optimization"]["table"].set_index("channel")
+    assert opt["optimal_spend"].sum() == pytest.approx(opt["current_spend"].sum(), rel=1e-4)
+    assert opt.loc["tv", "optimal_activity"] == pytest.approx(opt.loc["tv", "optimal_spend"] / 250.0, rel=1e-6)
+    html_txt = res["report"].read_text(encoding="utf-8")
+    assert "GRP（≈" in html_txt and "出稿量（GRP など）" in html_txt
+
+    mmm = BayesianMMM(cfg, md)
+    fit = mmm.fit()
+    plan = {"weeks": 8, "grp": {"tv": {"total": 400, "column": None}}}
+    fr = run_forecast(cfg, md, mmm, fit.posterior, plan, df_full=df)
+    pl = fr["plan"].set_index("channel")
+    assert pl.loc["tv", "planned_activity"] == pytest.approx(400)
+    assert pl.loc["tv", "planned_spend"] == pytest.approx(400 * 250.0)
+    build_forecast_report(tmp_path / "fc.html", cfg=cfg, md=md, res=fr)
+
+    ch = parse_channels("tv:tv_grp:delayed:s:tv_spend, search:search_spend")
+    assert ch[0]["spend_column"] == "tv_spend" and ch[0]["unit"] == "GRP" and "spend_column" not in ch[1]

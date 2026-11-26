@@ -102,7 +102,10 @@ def build_forecast_report(path, *, cfg, md, res: dict) -> None:
             + (f'<br>参考：前年同期の実績 {jp_num(hist_same, U)}' if hist_same is not None else "")
             + '</div></div>')
 
-    plan = res["plan"].rename(columns={"channel": "チャネル", "planned_spend": "来期の広告費（計画）",
+    plan = res["plan"].copy()
+    plan["planned_activity"] = [f"{a:,.0f} {u}" if u else "—" for a, u in zip(plan["planned_activity"], plan["unit"])]
+    plan = plan.drop(columns=["unit"]).rename(columns={"channel": "チャネル", "planned_spend": "来期の広告費（計画）",
+                                       "planned_activity": "来期の出稿量（GRP など）",
                                        "how": "計画の決め方", "weekly_pattern": "週ごとの配分",
                                        "last_year_same_period": "前年同期の実績額"})
     plan_html = _table(plan, {"来期の広告費（計画）": smart_num, "前年同期の実績額": smart_num}, left=True)
@@ -135,9 +138,10 @@ def build_forecast_report(path, *, cfg, md, res: dict) -> None:
 
     grp_html = ""
     for ch, g in res["grp"].items():
-        grp_html += (f'<p class="muted">{html.escape(ch)}：合計 {g["total_grp"]:,.0f} GRP × 1GRP あたり '
-                     f'{g["cost_per_grp"]:,.0f}（{g["cpg_source"]}、GRP の列 {html.escape(g["column"])}）'
-                     f'= {jp_num(g["total_grp"] * g["cost_per_grp"])}</p>')
+        u = g.get("unit", "GRP")
+        grp_html += (f'<p class="muted">{html.escape(ch)}：合計 {g["total_grp"]:,.0f} {u} × 1{u} あたり '
+                     f'{g["cost_per_grp"]:,.0f}（{g["cpg_source"]}、{u} の列 {html.escape(g["column"])}）'
+                     f'≈ 広告費 {jp_num(g["total_grp"] * g["cost_per_grp"])}</p>')
 
     curve_html = ""
     cv = res["curve"]

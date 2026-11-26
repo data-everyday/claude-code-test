@@ -37,6 +37,11 @@ def generate(n_weeks: int = 156, seed: int = 0, max_lag: int = 8) -> pd.DataFram
         y = y + beta * hill_np(ad_x, np.array([K]), np.array([S]))[:, 0]
     y = y + rng.normal(0, 400, n_weeks)
 
+    # TV の GRP（1 GRP ≈ 0.8、週ごとに ±10% のばらつき）。他の列の乱数に影響しないよう別の乱数で作る
+    rng_grp = np.random.default_rng(seed + 1000)
+    tv_grp = spend["tv"].round(0) / 0.8 * rng_grp.uniform(0.9, 1.1, n_weeks)
+
     return pd.DataFrame({"date": dates.strftime("%Y-%m-%d"), "sales": y.round(0),
                          **{f"{k}_spend": v.round(0) for k, v in spend.items()},
+                         "tv_grp": tv_grp.round(1),
                          "price": price.round(2), "promo": promo.astype(int)})

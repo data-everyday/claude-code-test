@@ -118,6 +118,11 @@ ROI 事前の中央値 = ad_share × KPI 合計 ÷ 広告費合計      （既�
 - 既定（`saturation: auto`）は K・S ともに推定。S の事前 Gamma(5,3) は中央値 1.56、C 字の事前確率 18%
 - 形がデータで決まるのは、支出の振れ幅が大きい（特に少額〜0 の週がある）チャネルだけ。
   支出が常に一定以上のチャネルは S が事前のままになりやすい（範囲内の ROI は比較的安定、範囲外の外挿は不確実）
+- **TV などを GRP（出稿量）でモデル化**する場合は、`column` に GRP の列、`spend_column` に広告費の列を指定
+  （例: `{name: tv, column: tv_grp, spend_column: tv_spend, adstock: delayed}`、単位は `unit`、既定 GRP）。
+  モデルの入力（adstock・飽和曲線）は GRP、ROI・CPA・予算最適化・シナリオ・予測の金額は広告費の列から計算し、
+  飽和曲線などのグラフの横軸は GRP、表は「○ GRP（≈○円）」で表示。1 GRP あたりの費用 = 両方が正の週の 合計広告費 ÷ 合計 GRP。
+  Colab では③のチャネル欄に `tv:tv_grp:delayed::tv_spend`（5 番目が広告費の列）
 - 全チャネルの既定は `model.saturation_default`（既定 auto）、チャネル別は `channels[].saturation` で指定（チャネル別が優先）。
   Colab では③の「飽和曲線の形」（全媒体の既定と媒体別）で選択:
 

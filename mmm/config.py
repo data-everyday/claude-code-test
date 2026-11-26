@@ -24,6 +24,13 @@ class ChannelConfig:
     # 任意: ROI 事前分布（指定時は LogNormal(log(mean), sd) を ROI に置く）
     roi_prior_mean: float | None = None  # LogNormal の中央値（設定キーは median）
     roi_prior_sd: float | None = None  # 対数スケールの標準偏差
+    # 任意: モデルには column（GRP などの出稿量）を入れ、ROI・CPA・最適化などの金額は spend_column を使う
+    spend_column: str | None = None
+    unit: str = ""  # column の単位（spend_column 指定時の既定は "GRP"）
+
+    @property
+    def is_activity(self) -> bool:
+        return bool(self.spend_column)
 
 
 @dataclass
@@ -277,6 +284,8 @@ def load_config(path: str | Path, overrides: dict[str, Any] | None = None) -> Co
             max_lag=ch.get("max_lag"),
             # LogNormal の中心は「中央値」。旧キー mean も受け付ける
             roi_prior_mean=_get(ch, "roi_prior.median", _get(ch, "roi_prior.mean")),
+            spend_column=(str(ch["spend_column"]).strip() or None) if ch.get("spend_column") else None,
+            unit=str(ch.get("unit") or ("GRP" if ch.get("spend_column") else "")),
             roi_prior_sd=_get(ch, "roi_prior.sd"),
         )
         if c.max_lag is not None and not 1 <= int(c.max_lag) <= MAX_LAG_LIMIT:

@@ -120,7 +120,7 @@ class BayesianMMM:
             default = {"median": d["median"], "sd": d["sd"], "source": "default(manual)"}
         elif d is not None:
             kpi_total = float(self.md.y[train_mask].sum())
-            spend_total = float(self.md.spend[train_mask].sum())
+            spend_total = float(self.md.cost[train_mask].sum())  # 金額
             if kpi_total <= 0:
                 raise ValueError("KPI の合計が 0 以下のため ROI 事前を自動計算できません。"
                                  "model.default_roi_prior に median を指定してください")
@@ -149,7 +149,7 @@ class BayesianMMM:
         if not auto_idx:
             return
         kpi_total = float(self.md.y[train_mask].sum())
-        spend = self.md.spend[train_mask].sum(axis=0)
+        spend = self.md.cost[train_mask].sum(axis=0)  # 金額
         rng = np.random.default_rng(seed)
         z = rng.standard_normal((n, len(priors)))
         fixed = np.zeros(n)
@@ -193,7 +193,7 @@ class BayesianMMM:
 
         y_s = md.y_scaled
         train_idx = np.flatnonzero(train_mask)
-        spend_sum_train = md.spend[train_mask].sum(axis=0)  # 元スケール
+        spend_sum_train = md.cost[train_mask].sum(axis=0)  # 金額（ROI = 貢献 ÷ 金額）
 
         with pm.Model(coords=coords) as model:
             xlag = pt.as_tensor_variable(self.xlag)

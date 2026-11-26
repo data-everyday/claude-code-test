@@ -39,7 +39,8 @@ def _load_bigquery(cfg: Config) -> pd.DataFrame:
 
 
 def validate_dataframe(df: pd.DataFrame, cfg: Config) -> pd.DataFrame:
-    user_cols = [cfg.date_column, cfg.target_column] + [c.column for c in cfg.channels] + [
+    spend_cols = [c.spend_column for c in cfg.channels if c.spend_column and c.spend_column != c.column]
+    user_cols = [cfg.date_column, cfg.target_column] + [c.column for c in cfg.channels] + spend_cols + [
         c.column for c in cfg.controls if not c.generated
     ]
     missing = [c for c in user_cols if c not in df.columns]
@@ -87,7 +88,7 @@ class ModelData:
 
     dates: pd.Series
     y: np.ndarray  # 元スケール (T,)
-    spend: np.ndarray  # 元スケール (T, C)
+    spend: np.ndarray  # モデルへの入力（元スケール, T×C）。GRP で入れるチャネルは GRP
     y_scale: float
     spend_scale: np.ndarray  # (C,)
     controls: np.ndarray  # 標準化済み (T, K)
@@ -99,6 +100,17 @@ class ModelData:
     changepoint_index: np.ndarray  # (J,) 変化点の週番号
     channel_names: list[str]
     control_names: list[str]
+    cost: np.ndarray | None = None  # 金額（T×C）。spend_column がないチャネルは spend と同じ
+    cpu: np.ndarray | None = None  # 出稿量 1 単位あたりの費用（C,）。金額で入れるチャネルは 1
+    units: list[str] | None = None  # 出稿量の単位（金額のチャネルは ""）
+
+    def __post_init__(self):
+        if self.cost is None:
+            self.cost = self.spend.copy()
+        if self.cpu is None:
+            self.cpu = np.ones(self.spend.shape[1])
+        if self.units is None:
+            self.units = [""] * self.spend.shape[1]
 
     @property
     def y_scaled(self) -> np.ndarray:
@@ -113,6 +125,22 @@ def build_model_data(df: pd.DataFrame, cfg: Config) -> ModelData:
     T = len(df)
     y = df[cfg.target_column].to_numpy(dtype=float)
     spend = df[[c.column for c in cfg.channels]].to_numpy(dtype=float)
+    # 金額: spend_column があればその列、なければモデル入力と同じ。1 単位あたりの費用は、
+    # 出稿量・金額がともに正の週の 合計金額 ÷ 合計出稿量（最適化・シナリオ・予測での換算に使う）
+    cost = np.column_stack([df[c.spend_column].to_numpy(dtype=float) if c.spend_column else spend[:, i]
+                            for i, c in enumerate(cfg.channels)])
+    cpu = np.ones(len(cfg.channels))
+    for i, c in enumerate(cfg.channels):
+        if c.spend_column:
+            both = (spend[:, i] > 0) & (cost[:, i] > 0)
+            if not both.any():
+                raise ValueError(f"{c.name}: 「{c.column}」と「{c.spend_column}」がともに正の週がないため、"
+                                 "1 単位あたりの費用を計算できません")
+            cpu[i] = cost[both, i].sum() / spend[both, i].sum()
+            mism = int(((spend[:, i] > 0) != (cost[:, i] > 0)).sum())
+            if mism:
+                log.warning("%s: 出稿量と金額の片方だけが 0 の週が %d 週あります（列の対応を確認してください）",
+                            c.name, mism)
     y_scale = float(np.mean(np.abs(y))) or 1.0
     spend_scale = spend.max(axis=0)
     spend_scale[spend_scale == 0] = 1.0
@@ -148,6 +176,9 @@ def build_model_data(df: pd.DataFrame, cfg: Config) -> ModelData:
         changepoint_basis=cp_basis,
         changepoint_index=cp_idx,
         channel_names=[c.name for c in cfg.channels],
+        cost=cost,
+        cpu=cpu,
+        units=[c.unit if c.spend_column else "" for c in cfg.channels],
         control_names=ctl_cols,
     )
 

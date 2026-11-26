@@ -14,8 +14,10 @@ def _split(text: str) -> list[list[str]]:
 
 
 def parse_channels(text: str) -> list[dict]:
-    """'tv:tv_spend:delayed:s, search:search_spend' -> channels 設定。
-    列名・adstock・曲線の形は省略可（列名=名前, adstock=geometric, 形=auto）。"""
+    """'tv:tv_grp:delayed:s:tv_spend, search:search_spend' -> channels 設定。
+    名前:列名:adstock:曲線の形:広告費の列 の順。列名・adstock・曲線の形・広告費の列は省略可
+    （列名=名前, adstock=geometric, 形=auto）。広告費の列を書くと、列名の列（GRP など）をモデルの入力にし、
+    ROI・CPA・最適化などの金額は広告費の列から計算する。"""
     out = []
     for parts in _split(text):
         name = parts[0]
@@ -26,7 +28,11 @@ def parse_channels(text: str) -> list[dict]:
         saturation = parts[3].lower() if len(parts) > 3 and parts[3] else "auto"
         if saturation not in ("auto", "c", "s"):
             raise ValueError(f"チャネル {name}: 曲線の形は auto / c / s です（入力: {saturation}）")
-        out.append({"name": name, "column": column, "adstock": adstock, "saturation": saturation})
+        item = {"name": name, "column": column, "adstock": adstock, "saturation": saturation}
+        if len(parts) > 4 and parts[4] and parts[4] != column:
+            item["spend_column"] = parts[4]
+            item["unit"] = parts[5] if len(parts) > 5 and parts[5] else "GRP"
+        out.append(item)
     if not out:
         raise ValueError("チャネルを 1 つ以上入力してください")
     return out
@@ -195,7 +201,7 @@ def describe_prior(config_path: str) -> str:
     set_interval(cfg.interval)
     md = build_model_data(load_dataframe(cfg), cfg)
     mmm = BayesianMMM(cfg, md)
-    kpi, spend = md.y.sum(), md.spend.sum()
+    kpi, spend = md.y.sum(), md.cost.sum()
     head = (f"目的変数（KPI）に使う列: 「{cfg.target_column}」（表示名 {cfg.kpi_name}）\n"
             f"  {len(md.y)} 週 ／ 合計 {kpi:,.0f}{cfg.kpi_unit} ／ 週平均 {md.y.mean():,.0f} ／ "
             f"最小 {md.y.min():,.0f} ／ 最大 {md.y.max():,.0f}\n"
@@ -232,9 +238,7 @@ def build_forecast_plan(*, weeks: int, grp_channel: str = "", grp_column: str = 
     plan = {"weeks": int(weeks), "spend": parse_kv(spend), "controls": parse_kv(controls),
             "trend": "flat" if trend in ("横ばい", "flat") else "extend"}
     if grp_channel.strip() and grp_total and grp_total > 0:
-        if not grp_column.strip():
-            raise ValueError("GRP で入力する場合は、GRP の列名を指定してください")
-        plan["grp"] = {grp_channel.strip(): {"total": float(grp_total), "column": grp_column.strip(),
+        plan["grp"] = {grp_channel.strip(): {"total": float(grp_total), "column": grp_column.strip() or None,
                                              "cost_per_grp": float(cost_per_grp) if cost_per_grp else None}}
         plan["compare_channel"] = grp_channel.strip()
         plan["spend"].pop(grp_channel.strip(), None)

@@ -47,7 +47,7 @@ def prior_media_share(md: ModelData, mmm: BayesianMMM, n: int = 20000, seed: int
     if any(p is None for p in priors):
         return None
     rng = np.random.default_rng(seed)
-    spend = md.spend.sum(axis=0)
+    spend = md.cost.sum(axis=0)  # 金額
     roi = np.column_stack([np.exp(np.log(p["median"]) + p["sd"] * rng.standard_normal(n))
                            for p in priors])
     share = (roi * spend).sum(axis=1) / md.y.sum()
@@ -184,7 +184,7 @@ def channel_summary(md: ModelData, fit: FitResult, mmm: BayesianMMM) -> pd.DataF
     contrib = p["channel_contribution"] * md.y_scale  # (D, T, C)
     total_contrib = contrib.sum(axis=1)  # (D, C)
     total_sales = md.y.sum()
-    spend_total = md.spend.sum(axis=0)
+    spend_total = md.cost.sum(axis=0)  # 金額（GRP などで入れたチャネルも金額で ROI・CPA を出す）
     roi = total_contrib / spend_total  # (D, C)
     lo, hi = _q(roi)
     clo, chi = _q(total_contrib)
@@ -196,6 +196,9 @@ def channel_summary(md: ModelData, fit: FitResult, mmm: BayesianMMM) -> pd.DataF
         rows.append({
             "channel": ch,
             "spend": spend_total[i],
+            "unit": md.units[i],  # 出稿量の単位（金額で入れたチャネルは ""）
+            "activity": float(md.spend[:, i].sum()) if md.units[i] else np.nan,
+            "cost_per_unit": float(md.cpu[i]) if md.units[i] else np.nan,
             "contribution_mean": total_contrib[:, i].mean(),
             "contribution_lo": clo[i],
             "contribution_hi": chi[i],
@@ -242,7 +245,7 @@ def marginal_roi(md: ModelData, mmm: BayesianMMM, params: dict, eps: float = 0.0
     # 実績を超える出稿での値は一部のサンプルが極端になりうるので中央値で
     base = np.median(contribution_given_multipliers(md, mmm, params, np.ones(C), window), axis=0)
     up = np.median(contribution_given_multipliers(md, mmm, params, np.full(C, 1 + eps), window), axis=0)
-    return (up - base) / (md.spend.sum(axis=0) * eps)
+    return (up - base) / (md.cost.sum(axis=0) * eps)  # 追加 KPI ÷ 追加金額
 
 
 def response_curves(md: ModelData, mmm: BayesianMMM, fit: FitResult,
@@ -252,13 +255,15 @@ def response_curves(md: ModelData, mmm: BayesianMMM, fit: FitResult,
     window = np.arange(len(md.y))
     C = len(md.channel_names)
     mults = np.linspace(0, max_multiplier, n_points)
-    spend_total = md.spend.sum(axis=0)
+    spend_total = md.spend.sum(axis=0)  # 横軸 = 出稿量（GRP などで入れたチャネルはその単位）
+    cost_total = md.cost.sum(axis=0)
     rows = []
     for m in mults:
         res = contribution_given_multipliers(md, mmm, params, np.full(C, m), window)
         lo, hi = _q(res)
         for i, ch in enumerate(md.channel_names):
             rows.append({"channel": ch, "multiplier": m, "spend": spend_total[i] * m,
+                         "cost": cost_total[i] * m,
                          "contribution_mean": float(np.median(res[:, i])),
                          "contribution_lo": lo[i], "contribution_hi": hi[i]})
     return pd.DataFrame(rows)
@@ -458,9 +463,10 @@ def cpa_levels(md: ModelData, mmm: BayesianMMM, fit: FitResult, thresholds,
         D = len(p["beta"])
         f = hill_np(np.broadcast_to((grid / scale)[None, :, None], (D, n_grid, 1)),
                     p["K"][:, i:i + 1], p["S"][:, i:i + 1])[:, :, 0] * p["beta"][:, i:i + 1] * md.y_scale
-        cpa = grid[None, :] / np.maximum(f, 1e-300)  # (D, n_grid)
+        # 平均 CPA = 金額 ÷ KPI。GRP などで入れたチャネルは 出稿量 × 1 単位あたりの費用 で金額に換算
+        cpa = grid[None, :] * md.cpu[i] / np.maximum(f, 1e-300)  # (D, n_grid)
 
-        cpa_mean = grid / np.maximum(np.median(f, axis=0), 1e-300)  # レポートに描く曲線（中央値）での平均 CPA
+        cpa_mean = grid * md.cpu[i] / np.maximum(np.median(f, axis=0), 1e-300)  # 曲線（中央値）での平均 CPA
 
         def point_at(c):
             """事後中央値の曲線上で平均 CPA が c 以下になる最大の出稿額（グラフ上の読み取りと一致）。"""
@@ -542,15 +548,15 @@ def optimal_weekly_spend(md: ModelData, mmm: BayesianMMM, fit: FitResult, econ: 
         actual_max = float(ad_money[:, i].max())
         grid = np.linspace(actual_max * max_ratio / n_grid, actual_max * max_ratio, n_grid)
 
-        def mprofit(x):  # 限界利益 ROI（追加 1 円あたりの粗利）。(D, len(x))
-            return beta * md.y_scale * _hill_marginal(np.asarray(x)[None, :] / scale, K, S) / scale * v
+        def mprofit(x):  # 限界利益 ROI（追加 1 円あたりの粗利）。(D, len(x))。出稿量 1 単位の費用で割って金額あたりに
+            return beta * md.y_scale * _hill_marginal(np.asarray(x)[None, :] / scale, K, S) / scale * v / md.cpu[i]
 
         mp = mprofit(grid)
         # 線の位置: 事後中央値の曲線の傾き（= 限界利益 ROI の平均）が 1 になる最大の出稿額
         # グラフの曲線（中央値）の傾き × 粗利
         f_med = np.median(beta * md.y_scale * hill_np(np.broadcast_to((grid / scale)[None, :, None],
                                                                       (len(beta), len(grid), 1)), K, S)[:, :, 0], axis=0)
-        mp_mean = np.gradient(f_med, grid) * v
+        mp_mean = np.gradient(f_med, grid) * v / md.cpu[i]
         okm = mp_mean >= 1.0
         if not okm.any():
             opt_point = 0.0
@@ -568,7 +574,7 @@ def optimal_weekly_spend(md: ModelData, mmm: BayesianMMM, fit: FitResult, econ: 
         mcur = mprofit(np.array([max(cur, 1e-9)]))[:, 0]
         prob_up = float((mcur > 1).mean())
         avg_roi = (p["channel_contribution"][:, :, i].sum(axis=1) * md.y_scale
-                   / md.spend[:, i].sum() * v)
+                   / md.cost[:, i].sum() * v)
         if prob_up >= 0.8:
             judge = "増やすと利益が増える可能性が高い"
         elif prob_up <= 0.2:
@@ -671,7 +677,8 @@ def model_settings(cfg, md: ModelData, mmm: BayesianMMM) -> dict[str, pd.DataFra
             src = {"channel": "チャネル別に指定"}.get(pr["source"], pr["source"])
             roi_txt = f"LogNormal(中央値 {pr['median']:.4g}, 幅 {pr['sd']:g}) ／ {src}"
         ch_rows.append({
-            "チャネル": ch.name, "列名（広告費）": ch.column,
+            "チャネル": ch.name, "列名（モデルの入力）": ch.column + (f"（{ch.unit}）" if ch.is_activity else "（金額）"),
+            "列名（広告費）": ch.spend_column or ch.column,
             "adstock": ad_label[ch.adstock], "最大ラグ（週）": int(mmm.spec.lags[i]),
             "飽和曲線（ヒル関数）の形": sat_label[ch.saturation],
             "ROI の事前分布": roi_txt,
@@ -767,7 +774,7 @@ def estimated_params(md: ModelData, mmm: BayesianMMM, fit: FitResult) -> pd.Data
             "減衰率 α": fmt(a),
             "ピーク θ（週）": fmt(p["theta"][:, i], "{:.1f}") if delayed else "—（出稿週がピーク）",
             "効果が半分になるまで（週）": "—" if delayed else fmt(half, "{:.1f}"),
-            "半飽和点 K（週次出稿額）": fmt(K_money, "{:,.0f}"),
+            "半飽和点 K（週次出稿量）": fmt(K_money, "{:,.0f}") + (f" {md.units[i]}" if md.units[i] else "円"),
             "形 S": fmt(S),
             "曲線の形": ("C 字（固定）" if mmm.cfg.channels[i].saturation == "c" else
                       "S 字" if np.median(S) > 1.05 else
