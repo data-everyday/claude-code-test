@@ -449,16 +449,13 @@ def fig_efficiency_zones(curve: pd.DataFrame, points: pd.DataFrame, chans: list[
                    edgecolors="#1d2330", linewidths=0.7, alpha=0.7, zorder=3)
         ytop = max(float(c["contribution_mean"].max()), float(pt_["steady_contribution"].max())) * 1.08
         ax.set_ylim(0, ytop)
-        for xv, lab in ((x13, "1/3 of max"), (x23, "2/3 of max")):
+        for xv in (x13, x23):
             if np.isfinite(xv) and xv <= right:
                 ax.axvline(xv, color=color, ls="--", lw=1.1, zorder=1)
-                ax.text(xv, ytop * 0.97, f" {lab}", fontsize=7, color="#1d2330", va="top")
         if z["s_shape"] and np.isfinite(z["inflection"]) and z["inflection"] <= right:
             ax.axvline(z["inflection"], color="#1d2330", ls="-.", lw=1.1, zorder=1,
                        label="inflection point (S-shape: steepest = most efficient)" if not labeled else None)
             labeled = True
-            ax.text(z["inflection"], ytop * 0.06, " inflection", fontsize=7, color="#1d2330", rotation=90,
-                    va="bottom")
         ax.set_title(f"{ch}  (S-shape)" if z["s_shape"] else ch, fontsize=10)
         ax.set_xlabel("weekly spend", fontsize=8)
         ax.set_ylabel("contribution incl. carryover", fontsize=8)
@@ -922,6 +919,7 @@ def build_report(path, *, cfg, summ, dec, pred, metrics, curves, decay, diagnost
                 '曲線が最大効果（出稿を増やし続けたときの上限）の 1/3・2/3 に達する週次出稿額で区切り、背景を 3 段階に塗っています：'
                 '<b>濃い = 0〜1/3（効率が最も良い部分）</b>、<b>中 = 1/3〜2/3（効率がほどほどの部分）</b>、'
                 '<b>薄い = 2/3〜（飽和が進み効率が落ちる部分）</b>。'
+                '左の破線が 1/3、右の破線が 2/3 の位置です。'
                 '「効率が最も良い部分まで出稿するなら 1/3 の線まで」「ほどほどの効率の範囲で最大限出すなら 2/3 の線まで」と読めます。'
                 '<b>S 字の媒体</b>（タイトルに S-shape）は出稿の最初のうち効きにくいため、0〜1/3 の前半は効率が良くありません。'
                 'S 字では曲線の傾きが最も急な<b>変曲点</b>（一点鎖線）が効率の最も良い点で、少なくともそこまでは出稿しないと効率が出ません。'
