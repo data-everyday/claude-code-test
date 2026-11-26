@@ -560,7 +560,8 @@ def test_lines_consistent_with_plotted_curve(tmp_path):
         c = curve[curve["channel"] == ch]
         x50 = sl.loc[i, "spend_at_50"]
         if x50 <= c["effective_spend"].max():
-            top = p["beta"][:, i].mean() * md.y_scale  # 上限（事後平均）
+            from mmm.analysis import CURVE_DRAWS, subsample
+            top = np.median(subsample(p, CURVE_DRAWS)["beta"][:, i]) * md.y_scale  # 上限（中央値）
             assert np.interp(x50, c["effective_spend"], c["contribution_mean"]) / top == pytest.approx(0.5, abs=0.02)
     ol = optimal_weekly_spend(md, mmm, fit, {"value_per_kpi": 1.0, "gross_margin": 1.0})
     assert (ol["optimal_weekly_spend"] >= 0).all()
@@ -626,7 +627,8 @@ def test_efficiency_zones(tmp_path):
     p = fit.posterior
     for i, ch in enumerate(md.channel_names):
         c = curve[curve["channel"] == ch]
-        top = p["beta"][:, i].mean() * md.y_scale
+        from mmm.analysis import CURVE_DRAWS, subsample
+        top = np.median(subsample(p, CURVE_DRAWS)["beta"][:, i]) * md.y_scale  # 上限（中央値）
         x13 = z.loc[i, "spend_at_third"]
         if x13 <= c["effective_spend"].max():  # グラフの曲線上で 1/3 の高さ
             assert np.interp(x13, c["effective_spend"], c["contribution_mean"]) / top == pytest.approx(1 / 3, abs=0.02)
@@ -634,3 +636,57 @@ def test_efficiency_zones(tmp_path):
             assert 0 < z.loc[i, "inflection"] < z.loc[i, "spend_at_two_thirds"]
         else:
             assert np.isnan(z.loc[i, "inflection"])
+
+
+def test_forecast(tmp_path):
+    from mmm.forecast import cost_per_grp, run_forecast
+    from mmm.forecast_report import build_forecast_report
+
+    path = _write_cfg(tmp_path)
+    df = pd.read_csv(tmp_path / "d.csv")
+    df["tv_grp"] = np.where(df["tv_spend"] > 0, df["tv_spend"] / 3.0, 0.0)
+    df.to_csv(tmp_path / "d.csv", index=False)
+    cfg = load_config(path)
+    md = build_model_data(validate_dataframe(df, cfg), cfg)
+    mmm = BayesianMMM(cfg, md)
+    fit = mmm.fit()
+    assert cost_per_grp(df, "tv_spend", "tv_grp") == pytest.approx(3.0)
+    plan = {"weeks": 10, "grp": {"tv": {"total": 500, "column": "tv_grp"}}, "spend": {"search": 1234.0},
+            "controls": {"promo": 1}}
+    res = run_forecast(cfg, md, mmm, fit.posterior, plan, df_full=df)
+    w = res["weekly"]
+    assert len(w) == 10 and (pd.to_datetime(w["date"]).diff().dropna().dt.days == 7).all()
+    assert pd.to_datetime(w["date"]).iloc[0] == pd.to_datetime(md.dates.iloc[-1]) + pd.Timedelta(days=7)
+    # 予測（中央値）は区間の中、内訳の合計（要素ごとの中央値）は予測とほぼ一致
+    assert ((w["kpi_lo"] <= w["kpi_mean"]) & (w["kpi_mean"] <= w["kpi_hi"])).all()
+    parts = w["baseline_level"] + w["seasonality"] + w[[c for c in w.columns if c.startswith("ext:")]].sum(axis=1) \
+        + w[md.channel_names].sum(axis=1)
+    np.testing.assert_allclose(parts, w["kpi_mean"], rtol=0.05)
+    # 計画の金額: TV = GRP × 単価、search = 入力値、週次配分の合計 = 計画
+    pl = res["plan"].set_index("channel")
+    assert pl.loc["tv", "planned_spend"] == pytest.approx(1500.0)
+    assert pl.loc["search", "planned_spend"] == pytest.approx(1234.0)
+    assert w["spend:tv"].sum() == pytest.approx(1500.0)
+    # 比較曲線の倍率 1 = 計画どおりの予測、GRP が増えるほど TV の増分は増える
+    cv = res["curve"]
+    assert cv.attrs["channel"] == "tv" and cv.attrs["is_grp"]
+    assert cv.loc[cv["multiplier"] == 1.0, "kpi_total"].iloc[0] == pytest.approx(res["summary"]["kpi_total_mean"], rel=1e-6)
+    assert (np.diff(cv["channel_contribution"]) >= -1e-9).all()
+    # promo = 1（0/1 の変数）→ 基準 0 との差で、毎週同じ効果
+    assert w["ext:promo"].nunique() == 1
+    build_forecast_report(tmp_path / "fc.html", cfg=cfg, md=md, res=res)
+    assert "来期シミュレーション" in (tmp_path / "fc.html").read_text(encoding="utf-8")
+
+
+def test_build_forecast_plan():
+    from mmm.colab import build_forecast_plan, parse_kv
+
+    assert parse_kv("youtube=1_000, search＝2.5e3") == {"youtube": 1000.0, "search": 2500.0}
+    p = build_forecast_plan(weeks=13, grp_channel="tv", grp_column="tv_grp", grp_total=1500,
+                            spend="tv=999, youtube=1e8", controls="newmodel=1", trend="横ばい")
+    assert p["weeks"] == 13 and p["trend"] == "flat"
+    assert p["grp"]["tv"] == {"total": 1500.0, "column": "tv_grp", "cost_per_grp": None}
+    assert p["spend"] == {"youtube": 1e8} and p["controls"] == {"newmodel": 1.0}
+    assert "grp" not in build_forecast_plan(weeks=4)
+    with pytest.raises(ValueError):
+        build_forecast_plan(weeks=4, grp_channel="tv", grp_total=10)

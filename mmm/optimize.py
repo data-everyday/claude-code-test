@@ -51,7 +51,8 @@ def optimize_budget(md: ModelData, mmm: BayesianMMM, fit: FitResult, opt_cfg: di
     spend_scale = max(cur_spend.sum(), 1.0)
 
     def total(m):
-        return contribution_given_multipliers(md, mmm, params, m, window).mean(axis=0).sum()
+        # 実績を超える出稿では一部のサンプルが極端になりうるので、総貢献の中央値を使う
+        return float(np.median(contribution_given_multipliers(md, mmm, params, m, window).sum(axis=1)))
 
     def obj(m):
         return -total(m) / contrib_scale
@@ -77,8 +78,8 @@ def optimize_budget(md: ModelData, mmm: BayesianMMM, fit: FitResult, opt_cfg: di
         "multiplier": m_opt,
         "lower_bound": lb,
         "upper_bound": ub,
-        "current_contribution": base_draws.mean(axis=0),
-        "optimal_contribution": opt_draws.mean(axis=0),
+        "current_contribution": np.median(base_draws, axis=0),
+        "optimal_contribution": np.median(opt_draws, axis=0),
     })
     table["spend_change_pct"] = (table["multiplier"] - 1) * 100
     return {
@@ -87,9 +88,9 @@ def optimize_budget(md: ModelData, mmm: BayesianMMM, fit: FitResult, opt_cfg: di
         "period_start": md.dates.iloc[window[0]],
         "period_end": md.dates.iloc[window[-1]],
         "budget": budget,
-        "current_total_contribution": float(base_draws.sum(axis=1).mean()),
-        "optimal_total_contribution": float(opt_draws.sum(axis=1).mean()),
-        "uplift_mean": float(uplift.mean()),
+        "current_total_contribution": float(np.median(base_draws.sum(axis=1))),
+        "optimal_total_contribution": float(np.median(opt_draws.sum(axis=1))),
+        "uplift_mean": float(np.median(uplift)),
         "uplift_lo": float(np.quantile(uplift, interval_bounds()[0])),
         "uplift_hi": float(np.quantile(uplift, interval_bounds()[1])),
         "prob_uplift_positive": float((uplift > 0).mean()),
@@ -122,7 +123,8 @@ def minimize_spend(md: ModelData, mmm: BayesianMMM, fit: FitResult, opt_cfg: dic
     spend_scale = max(cur_spend.sum(), 1.0)
 
     def total(m):
-        return contribution_given_multipliers(md, mmm, params, m, window).mean(axis=0).sum()
+        # 実績を超える出稿では一部のサンプルが極端になりうるので、総貢献の中央値を使う
+        return float(np.median(contribution_given_multipliers(md, mmm, params, m, window).sum(axis=1)))
 
     base_total = total(np.ones(C))
     contrib_scale = max(abs(base_total), 1e-12)
@@ -163,8 +165,8 @@ def minimize_spend(md: ModelData, mmm: BayesianMMM, fit: FitResult, opt_cfg: dic
         "multiplier": m_opt,
         "lower_bound": lb,
         "upper_bound": ub,
-        "current_contribution": base_draws.mean(axis=0),
-        "optimal_contribution": opt_draws.mean(axis=0),
+        "current_contribution": np.median(base_draws, axis=0),
+        "optimal_contribution": np.median(opt_draws, axis=0),
     })
     table["spend_change_pct"] = (table["multiplier"] - 1) * 100
     cur_total, new_total = float(cur_spend.sum()), float((cur_spend * m_opt).sum())
@@ -178,9 +180,9 @@ def minimize_spend(md: ModelData, mmm: BayesianMMM, fit: FitResult, opt_cfg: dic
         "minimum_budget": new_total,
         "saving": cur_total - new_total,
         "saving_pct": (cur_total - new_total) / cur_total if cur_total else np.nan,
-        "current_total_contribution": float(base_draws.sum(axis=1).mean()),
-        "optimal_total_contribution": float(opt_draws.sum(axis=1).mean()),
-        "kpi_change_mean": float(diff.mean()),
+        "current_total_contribution": float(np.median(base_draws.sum(axis=1))),
+        "optimal_total_contribution": float(np.median(opt_draws.sum(axis=1))),
+        "kpi_change_mean": float(np.median(diff)),
         "kpi_change_lo": float(np.quantile(diff, lo_q)),
         "kpi_change_hi": float(np.quantile(diff, hi_q)),
         "prob_kpi_not_lower": float((opt_draws.sum(axis=1) >= base_draws.sum(axis=1) * ratio).mean()),

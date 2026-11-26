@@ -31,6 +31,12 @@ def main(argv=None) -> int:
     p_sim.add_argument("--posterior", help="posterior.nc のパス（省略時は output.dir/posterior.nc）")
     p_sim.add_argument("--set", action="append", metavar="KEY=VALUE", help="config の任意の値を上書き")
 
+    p_fc = sub.add_parser("forecast", help="保存済みの推定結果で来期をシミュレーション（再推定なし）")
+    p_fc.add_argument("--config", default="mmm_config.yaml")
+    p_fc.add_argument("--plan", required=True, help="来期の計画を書いた YAML")
+    p_fc.add_argument("--posterior", help="posterior.nc のパス（省略時は output.dir/posterior.nc）")
+    p_fc.add_argument("--set", action="append", metavar="KEY=VALUE", help="config の任意の値を上書き")
+
     p_s = sub.add_parser("sample-data", help="動作確認用の合成データを生成")
     p_s.add_argument("--out", default="data/sample_mmm.csv")
     p_s.add_argument("--weeks", type=int, default=156)
@@ -60,6 +66,8 @@ def main(argv=None) -> int:
     cfg = load_config(args.config, overrides)
     if args.cmd == "simulate":
         return _simulate(cfg, args)
+    if args.cmd == "forecast":
+        return _forecast(cfg, args)
 
     from .pipeline import run
 
@@ -113,6 +121,48 @@ def _simulate(cfg, args) -> int:
                    "delta_contribution", "delta_lo", "delta_hi", "incremental_roi",
                    "prob_delta_positive"]].round(2).to_string(index=False))
     print(f"\n出力: {out}")
+    return 0
+
+
+def _forecast(cfg, args) -> int:
+    from pathlib import Path
+
+    import pandas as pd
+    import yaml
+
+    from .analysis import set_interval
+    from .data import build_model_data, load_dataframe
+    from .forecast import run_forecast
+    from .forecast_report import build_forecast_report
+    from .model import BayesianMMM
+    from .scenario import load_posterior
+
+    set_interval(cfg.interval)
+    with open(args.plan, encoding="utf-8") as f:
+        plan = yaml.safe_load(f) or {}
+    post_path = Path(args.posterior) if args.posterior else cfg.output_dir / "posterior.nc"
+    if not post_path.exists():
+        print(f"{post_path} がありません。先に `python -m mmm run` で推定してください")
+        return 1
+    md = build_model_data(load_dataframe(cfg), cfg)
+    posterior = load_posterior(post_path)
+    if posterior["mu"].shape[1] != len(md.y) or posterior["beta"].shape[1] != len(md.channel_names):
+        print("保存済みの推定結果と現在のデータ/設定（週数・チャネル数）が一致しません。再推定してください")
+        return 1
+    df_full = pd.read_csv(cfg.csv_path) if cfg.source == "csv" else None
+    res = run_forecast(cfg, md, BayesianMMM(cfg, md), posterior, plan, df_full=df_full)
+    out = cfg.output_dir
+    out.mkdir(parents=True, exist_ok=True)
+    res["weekly"].to_csv(out / "forecast_weekly.csv", index=False)
+    res["by_channel"].to_csv(out / "forecast_by_channel.csv", index=False)
+    res["plan"].to_csv(out / "forecast_plan.csv", index=False)
+    if len(res["curve"]):
+        res["curve"].to_csv(out / "forecast_curve.csv", index=False)
+    build_forecast_report(out / "forecast_report.html", cfg=cfg, md=md, res=res)
+    s = res["summary"]
+    print(f"来期 {s['weeks']} 週の {cfg.kpi_name} 予測: {s['kpi_total_mean']:,.0f}"
+          f"（区間 {s['kpi_total_lo']:,.0f}〜{s['kpi_total_hi']:,.0f}）、うち広告 {s['media_total_mean']:,.0f}")
+    print(f"レポート: {out / 'forecast_report.html'}")
     return 0
 
 

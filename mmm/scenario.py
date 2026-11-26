@@ -73,11 +73,12 @@ def run_scenarios(md: ModelData, mmm: BayesianMMM, posterior: dict, scenarios: l
                 "scenario": name, "period_weeks": weeks, "channel": ch,
                 "current_spend": spend0, "scenario_spend": spend1,
                 "spend_change": spend1 - spend0,
-                "current_contribution": b.mean(), "scenario_contribution": n.mean(),
-                "delta_contribution": d.mean(),
+                # 実績を超える出稿では一部のサンプルが極端になりうるので中央値
+                "current_contribution": float(np.median(b)), "scenario_contribution": float(np.median(n)),
+                "delta_contribution": float(np.median(d)),
                 "delta_lo": np.quantile(d, interval_bounds()[0]),
                 "delta_hi": np.quantile(d, interval_bounds()[1]),
-                "incremental_roi": (d.mean() / (spend1 - spend0)
+                "incremental_roi": (float(np.median(d)) / (spend1 - spend0)
                                     if abs(spend1 - spend0) > 1e-9 else np.nan),
                 "prob_delta_positive": float((d > 0).mean()),
             }
@@ -98,7 +99,7 @@ def load_posterior(path) -> dict:
     post = idata.posterior
     out = {}
     for name in ["intercept", "beta", "alpha", "theta", "K", "S", "sigma", "mu",
-                 "channel_contribution"]:
+                 "channel_contribution", "trend_coef", "changepoint_delta", "fourier_coef", "control_coef"]:
         if name in post:
             v = np.asarray(post[name].values)
             out[name] = v.reshape((-1,) + v.shape[2:])

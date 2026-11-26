@@ -296,6 +296,34 @@ python -m mmm simulate --config mmm_config.yaml --scenario-file my_scenarios.yam
 結果はチャネル別と合計（`TOTAL`）で、貢献の変化・94% 区間・増分 ROI・改善がプラスの確率を出力します（`scenarios.csv`）。
 データや設定（週数・チャネル）を変えた場合は `run` で再推定してください。
 
+## 来期のシミュレーション（任意）
+
+推定済みのモデルで、来期の出稿計画から広告の貢献と KPI の予測値（外部要因を含む）を出します（再推定なし）。
+
+```bash
+python -m mmm forecast --config mmm_config.yaml --plan plan.yaml
+```
+
+```yaml
+weeks: 13                     # 来期の週数（データ最終週の翌週から）
+grp:                          # GRP で入力するチャネル（1 GRP あたりの費用で広告費に換算）
+  tv: {total: 1500, column: tv_grp, cost_per_grp: null}   # null = 実績の 広告費 ÷ GRP
+spend: {search: 50000000}     # その他のチャネルの来期合計（未指定は前年同期の実績額）
+controls: {newmodel: 1}       # コントロール変数の来期の値（未指定は最終週の値。イベントは日付から自動）
+trend: extend                 # extend（延長）/ flat（横ばい）
+```
+
+- 週ごとの配分は前年同期の週次パターンに比例（なければ直近の週、それもなければ均等）。前期までの出稿の持ち越しも含む
+- 出力: `forecast_report.html`（予測の合計と区間・週次の予測・内訳・チャネル別・GRP を 0〜2 倍にした比較）、
+  `forecast_weekly.csv` / `forecast_by_channel.csv` / `forecast_plan.csv` / `forecast_curve.csv`
+- Colab では、レポートを出した後の任意のステップ「来期のシミュレーション」で実行
+
+## 代表値（平均と中央値）
+
+期間内の貢献・ROI などは事後平均。実績を超える出稿を扱う部分（週次・期間合計の飽和曲線、その上の線、最適化、シナリオ、来期の予測）は
+**事後中央値**を使います。出稿がデータの終盤に集中するチャネル（持ち越しの効果が期間外に出る）などでは、
+一部のサンプルが極端な値になり、平均が大きく引っ張られるためです。
+
 ## 予算最適化の前提
 
 - ① 予算を変えずに KPI を最大化：総額 = `total_budget`（null なら実績額）で、期待貢献が最大の配分

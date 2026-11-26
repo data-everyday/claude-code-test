@@ -211,3 +211,31 @@ def describe_prior(config_path: str) -> str:
             f"→ 事前に想定している広告貢献シェア: 中央値 {ps['median']:.0%}"
             f"（{interval_label()}範囲 {ps['lo']:.0%}〜{ps['hi']:.0%}）\n"
             "データが十分に強いチャネルは推定でこの想定から離れ、弱いチャネルはこの想定に近い値になります。")
+
+
+def parse_kv(text: str) -> dict[str, float]:
+    """'youtube=100000000, search=5e7' -> {"youtube": 1e8, "search": 5e7}（全角記号・桁区切りの _ も可）"""
+    out = {}
+    txt = (text or "").replace("＝", "=").replace("、", ",").replace("，", ",")
+    for item in [x.strip() for x in txt.split(",") if x.strip()]:
+        if "=" not in item:
+            raise ValueError(f"「名前=値」の形で入力してください（入力: {item}）")
+        k, v = item.split("=", 1)
+        out[k.strip()] = float(v.strip().replace("_", ""))
+    return out
+
+
+def build_forecast_plan(*, weeks: int, grp_channel: str = "", grp_column: str = "", grp_total: float = 0,
+                        cost_per_grp: float = 0, spend: str = "", controls: str = "",
+                        trend: str = "延長") -> dict:
+    """Colab フォームの値 → forecast の計画（plan）。"""
+    plan = {"weeks": int(weeks), "spend": parse_kv(spend), "controls": parse_kv(controls),
+            "trend": "flat" if trend in ("横ばい", "flat") else "extend"}
+    if grp_channel.strip() and grp_total and grp_total > 0:
+        if not grp_column.strip():
+            raise ValueError("GRP で入力する場合は、GRP の列名を指定してください")
+        plan["grp"] = {grp_channel.strip(): {"total": float(grp_total), "column": grp_column.strip(),
+                                             "cost_per_grp": float(cost_per_grp) if cost_per_grp else None}}
+        plan["compare_channel"] = grp_channel.strip()
+        plan["spend"].pop(grp_channel.strip(), None)
+    return plan

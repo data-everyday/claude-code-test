@@ -66,7 +66,7 @@ def week_flags(dates: pd.Series, periods, week_anchor: str = "start") -> np.ndar
 
 
 def add_event_columns(df: pd.DataFrame, date_col: str, events: list[dict],
-                      week_anchor: str) -> tuple[pd.DataFrame, list[str]]:
+                      week_anchor: str, quiet: bool = False) -> tuple[pd.DataFrame, list[str]]:
     """events（config で解釈済み）に従って event_<name> 列を追加。全期間 0 の列は除外して返す。"""
     if not events:
         return df, []
@@ -76,6 +76,8 @@ def add_event_columns(df: pd.DataFrame, date_col: str, events: list[dict],
         periods = builtin_periods(ev["name"], years) if ev["builtin"] else ev["periods"]
         col = EVENT_PREFIX + ev["name"]
         df[col] = week_flags(df[date_col], periods, week_anchor)
+        if quiet:
+            continue
         if df[col].sum() == 0:
             log.warning("イベント %s はデータ期間内に該当週がないため除外します", ev["name"])
             dropped.append(col)
