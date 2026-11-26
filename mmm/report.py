@@ -424,6 +424,10 @@ color:var(--fg);background:var(--bg);line-height:1.6}
 main{max-width:1100px;margin:0 auto;padding:24px 16px 64px}
 h1{font-size:1.6rem;margin:0 0 4px}h2{font-size:1.15rem;margin:36px 0 10px;padding-bottom:4px;border-bottom:1px solid var(--line)}
 .muted{color:var(--muted);font-size:.9rem}
+.hero{background:#1b2a4a;color:#fff;border-radius:12px;padding:20px 24px;margin:18px 0 6px}
+.hero-label{font-size:1rem;opacity:.9}
+.hero-value{font-size:3rem;font-weight:700;line-height:1.15;margin:4px 0}
+.hero-sub{font-size:.85rem;opacity:.85}
 .kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:10px;margin-top:16px}
 .kpi{background:var(--card);border-radius:8px;padding:12px 14px}.kpi b{display:block;font-size:1.25rem}
 .kpi span{display:block;color:var(--muted);font-size:.8rem}
@@ -453,8 +457,10 @@ def build_report(path, *, cfg, summ, dec, pred, metrics, curves, decay, diagnost
                  controls: tuple | None = None,
                  settings: dict | None = None,
                  params: pd.DataFrame | None = None,
-                 opt_min: dict | None = None) -> None:
+                 opt_min: dict | None = None,
+                 share_ci: dict | None = None) -> None:
     IL = interval_label()
+    hero_html = ""  # 冒頭で目立たせる「広告による増分のシェア」（下で total_kpi 等の計算後に作成）
     prior_html = ""
     if prior_share:
         prior_html = (f'<span>事前の想定 {prior_share["median"]:.0%}'
@@ -469,6 +475,14 @@ def build_report(path, *, cfg, summ, dec, pred, metrics, curves, decay, diagnost
     blended_roi = total_contrib / total_spend
     blended_cpa = total_spend / total_contrib if total_contrib > 0 else float("nan")
     weeks = len(dec)
+    ci_txt = (f"{IL}区間 {share_ci['lo']:.1%}〜{share_ci['hi']:.1%}" if share_ci else "")
+    prior_txt = (f"／事前の想定 {prior_share['median']:.0%}" if prior_share else "")
+    hero_html = (
+        f'<div class="hero"><div class="hero-label">広告による増分{K}は、{K}全体の</div>'
+        f'<div class="hero-value">{ad_share:.1%}</div>'
+        f'<div class="hero-sub">{ci_txt}{prior_txt}<br>'
+        f'= 広告による増分 {jp_num(total_contrib, U)} ÷ {K}の合計 {jp_num(total_kpi, U)}（全 {weeks} 週、'
+        f'対象チャネル {len(channels)}）</div></div>')
 
     diag_html = ""
     if diagnostics["warnings"]:
@@ -838,6 +852,7 @@ def build_report(path, *, cfg, summ, dec, pred, metrics, curves, decay, diagnost
 KPI（目的変数）{K}（列名 {html.escape(cfg.target_column)}）／ チャネル {len(channels)}<br>
 区間はベイズ信用区間（{IL}）：「真の値がこの範囲にある確率が {IL}」という意味です。
 広告貢献シェアの「事前の想定」は ROI 事前分布から計算した値で、推定結果がこれに近く区間も広い場合はデータより事前で決まっている可能性があります。</p>
+{hero_html}
 <div class="kpis">
 <div class="kpi"><span>{K}の合計（全 {weeks} 週）</span><b>{jp_num(total_kpi, U)}</b><span>{total_kpi:,.0f}{U}。データの「{html.escape(cfg.target_column)}」列の合計（広告による増分＋広告以外の両方を含む）</span></div>
 <div class="kpi"><span>広告費の合計（全 {weeks} 週）</span><b>{jp_num(total_spend)}</b><span>{total_spend:,.0f}。全チャネルの出稿額の合計</span></div>

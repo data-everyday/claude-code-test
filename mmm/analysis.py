@@ -33,6 +33,13 @@ def _q(a: np.ndarray, axis=0):
     return np.quantile(a, lo, axis=axis), np.quantile(a, hi, axis=axis)
 
 
+def media_share(md: ModelData, fit: FitResult) -> dict:
+    """広告による増分が KPI 全体に占める割合（事後平均と区間）。"""
+    tot = fit.posterior["channel_contribution"].sum(axis=(1, 2)) * md.y_scale / md.y.sum()
+    lo, hi = _q(tot)
+    return {"mean": float(tot.mean()), "lo": float(lo), "hi": float(hi)}
+
+
 def prior_media_share(md: ModelData, mmm: BayesianMMM, n: int = 20000, seed: int = 0) -> dict | None:
     """ROI の事前分布が想定している「広告貢献シェア（全チャネル合計の貢献 ÷ KPI 合計）」の分布。
     広告貢献 = Σ ROI_c × 出稿額_c なので、ROI の事前から直接計算できる。HalfNormal 係数のチャネルがあれば None。"""

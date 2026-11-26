@@ -66,6 +66,7 @@ def run(cfg: Config) -> dict:
                                                      sat_levels=sat_levels)
     base = analysis.baseline_components(md, fit)
     prior_share = analysis.prior_media_share(md, mmm)
+    share_ci = analysis.media_share(md, fit)
     events_df = analysis.event_effects(md, fit, cfg)
     ctl_sum, ctl_weekly = analysis.control_contributions(md, fit)
     settings = analysis.model_settings(cfg, md, mmm)
@@ -127,7 +128,7 @@ def run(cfg: Config) -> dict:
                  optimal_line=opt_line, events=events_df,
                  sat_levels=sat_levels, cpa_levels=cpa_df,
                  controls=(ctl_sum, ctl_weekly), settings=settings, params=params_df,
-                 opt_min=opt_min)
+                 opt_min=opt_min, share_ci=share_ci)
     log.info("レポート出力: %s", report_path)
 
     if cfg.output_bq.get("enabled"):

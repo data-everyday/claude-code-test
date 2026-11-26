@@ -132,6 +132,7 @@ def test_end_to_end_positive_effects(tmp_path):
     assert hm.loc["train", "n_weeks"] + hm.loc["test", "n_weeks"] == 80
     assert hm.loc["train", "period_end"] < hm.loc["test", "period_start"]
     html_txt = res["report"].read_text(encoding="utf-8")
+    assert 'class="hero"' in html_txt and "広告による増分" in html_txt
     assert "学習期間（train）" in html_txt and "テスト期間（test）" in html_txt
     opt = res["optimization"]["table"]
     assert opt["optimal_spend"].sum() == pytest.approx(opt["current_spend"].sum(), rel=1e-4)
