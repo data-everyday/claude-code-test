@@ -748,3 +748,18 @@ def test_activity_channel_grp(tmp_path):
 
     ch = parse_channels("tv:tv_grp:delayed:s:tv_spend, search:search_spend")
     assert ch[0]["spend_column"] == "tv_spend" and ch[0]["unit"] == "GRP" and "spend_column" not in ch[1]
+
+
+def test_colab_channel_check():
+    from mmm.colab import channel_check, check_notebook_version, parse_channels
+
+    cols = ["date", "y", "TV CX-5 (On/After 2026-05-18)", "TV CX-5 GRP (On/After 2026-05-18)", "search"]
+    money = {"channels": parse_channels("tv:TV CX-5 (On/After 2026-05-18):delayed, search:search")}
+    t, w = channel_check(money, cols)
+    assert list(t["単位"]) == ["金額", "金額"]
+    assert len(w) == 1 and "TV CX-5 GRP (On/After 2026-05-18)" in w[0]
+    grp = {"channels": parse_channels("tv:TV CX-5 GRP (On/After 2026-05-18):delayed::TV CX-5 (On/After 2026-05-18)")}
+    t, w = channel_check(grp, cols)
+    assert t.loc[0, "単位"] == "GRP" and t.loc[0, "ROI・CPA・最適化の金額の列"] == "TV CX-5 (On/After 2026-05-18)"
+    assert not w
+    assert check_notebook_version("cx5", "2026-01-01") and check_notebook_version("cx5", "2099-01-01") is None

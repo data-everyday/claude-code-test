@@ -243,3 +243,46 @@ def build_forecast_plan(*, weeks: int, grp_channel: str = "", grp_column: str = 
         plan["compare_channel"] = grp_channel.strip()
         plan["spend"].pop(grp_channel.strip(), None)
     return plan
+
+
+# Colab ノートブックの版（ノートブック側の版がこれより古いと ① で注意を出す）
+NOTEBOOK_VERSIONS = {"cx5": "2026-11-26b"}
+
+
+def check_notebook_version(kind: str, version: str) -> str | None:
+    """ノートブックの版が古ければ注意文を返す。"""
+    latest = NOTEBOOK_VERSIONS.get(kind)
+    if latest and version < latest:
+        return (f"⚠ このノートブックは古い版です（{version}、最新 {latest}）。"
+                "最新のノートブックをアップロードし直して使ってください（ドライブに同じ名前の古いファイルが"
+                "残っていると、そちらを開いてしまうことがあります）")
+    return None
+
+
+def _grp_twin(col: str, columns) -> str | None:
+    """金額の列「X (...)」に対応する GRP の列（「X GRP (...)」や「X GRP」）がデータにあれば、その列名。"""
+    head, sep, tail = col.partition(" (")
+    for c in columns:
+        if c != col and "GRP" in c.upper() and c.replace(" GRP", "").replace("GRP ", "") == col:
+            return c
+        if sep and c == f"{head} GRP ({tail}":
+            return c
+    return None
+
+
+def channel_check(cfg_dict: dict, columns) -> tuple[pd.DataFrame, list[str]]:
+    """④ の確認用：チャネルごとに、モデルに入れる列（GRP / 金額）と金額の列を表にし、気になる点を返す。"""
+    import pandas as pd
+
+    rows, warns = [], []
+    for c in cfg_dict["channels"]:
+        sp = c.get("spend_column")
+        rows.append({"チャネル": c["name"], "モデルに入れる列（横軸）": c["column"],
+                     "単位": c.get("unit") or ("GRP" if sp else "金額"),
+                     "ROI・CPA・最適化の金額の列": sp or c["column"]})
+        if not sp:
+            twin = _grp_twin(c["column"], columns)
+            if twin:
+                warns.append(f"⚠ {c['name']}: 金額の列「{c['column']}」でモデル化します。GRP で推定する場合は、"
+                             f"列名を「{twin}」、広告費列を「{c['column']}」にして ④ を再実行してください")
+    return pd.DataFrame(rows), warns
