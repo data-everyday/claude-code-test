@@ -560,11 +560,22 @@ def test_lines_consistent_with_plotted_curve(tmp_path):
         c = curve[curve["channel"] == ch]
         x50 = sl.loc[i, "spend_at_50"]
         if x50 <= c["effective_spend"].max():
-            from mmm.analysis import CURVE_DRAWS, subsample
-            top = np.median(subsample(p, CURVE_DRAWS)["beta"][:, i]) * md.y_scale  # 上限（中央値）
+            from mmm.analysis import curve_params
+            top = curve_params(md, mmm, fit, i)[0] * md.y_scale  # グラフの曲線の上限
             assert np.interp(x50, c["effective_spend"], c["contribution_mean"]) / top == pytest.approx(0.5, abs=0.02)
     ol = optimal_weekly_spend(md, mmm, fit, {"value_per_kpi": 1.0, "gross_margin": 1.0})
     assert (ol["optimal_weekly_spend"] >= 0).all()
+    # 曲線はなめらか（ヒル関数）で、点ごとの中央値にほぼ一致する
+    from mmm.analysis import CURVE_DRAWS, subsample
+    from mmm.transforms import hill_np
+    q = subsample(p, CURVE_DRAWS)
+    for i, ch in enumerate(md.channel_names):
+        c = curve[curve["channel"] == ch]
+        x = c["effective_spend"].to_numpy()
+        u = np.broadcast_to((x / md.spend_scale[i])[None, :, None], (len(q["beta"]), len(x), 1))
+        med = np.median(hill_np(u, q["K"][:, i:i + 1], q["S"][:, i:i + 1])[:, :, 0] * q["beta"][:, i:i + 1],
+                        axis=0) * md.y_scale
+        assert np.abs(c["contribution_mean"].to_numpy() - med).max() <= 0.05 * med.max()
 
 
 def test_minimize_spend(tmp_path):
@@ -627,8 +638,8 @@ def test_efficiency_zones(tmp_path):
     p = fit.posterior
     for i, ch in enumerate(md.channel_names):
         c = curve[curve["channel"] == ch]
-        from mmm.analysis import CURVE_DRAWS, subsample
-        top = np.median(subsample(p, CURVE_DRAWS)["beta"][:, i]) * md.y_scale  # 上限（中央値）
+        from mmm.analysis import curve_params
+        top = curve_params(md, mmm, fit, i)[0] * md.y_scale  # グラフの曲線の上限
         x13 = z.loc[i, "spend_at_third"]
         if x13 <= c["effective_spend"].max():  # グラフの曲線上で 1/3 の高さ
             assert np.interp(x13, c["effective_spend"], c["contribution_mean"]) / top == pytest.approx(1 / 3, abs=0.02)

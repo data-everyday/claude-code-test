@@ -275,6 +275,66 @@ CURVE_DRAWS = 400
 MIN_LINE_RATIO = 0.1
 
 
+_CURVE_CACHE: dict = {}
+BAND_DRAWS = 2000  # 週次飽和曲線の帯（信用区間）に使うサンプル数
+
+
+def _smooth_edge(e: np.ndarray, win: int = 9) -> np.ndarray:
+    """帯の縁の移動平均（端は端の値で延長）。始点（出稿 0 → 貢献 0）はそのまま。"""
+    if len(e) < win:
+        return e
+    pad = win // 2
+    ext = np.concatenate([np.full(pad, e[0]), e, np.full(pad, e[-1])])
+    out = np.convolve(ext, np.ones(win) / win, mode="valid")
+    out[0] = e[0]
+    return out
+
+
+def curve_params(md: ModelData, mmm: BayesianMMM, fit: FitResult, i: int,
+                 n_draws: int = CURVE_DRAWS) -> tuple[float, float, float]:
+    """グラフに描く週次飽和曲線（なめらかな 1 本）のパラメータ (B, K, S)（スケール済み）。
+
+    曲線 = B × y_scale × Hill(x / spend_scale; K, S)。事後サンプルの曲線の「点ごとの中央値」は、
+    点ごとに中央に来るサンプルが入れ替わるため折れ目（ぎざぎざ）ができる。そこで点ごとの中央値に
+    ヒル関数を当てはめ、なめらかな曲線にする。線の位置（25/50/75%・1/3・2/3・変曲点・CPA・最適点）と
+    実績の〇はすべてこの曲線から計算するので、グラフ上の読み取りと一致する。
+    """
+    from scipy.optimize import least_squares
+
+    post = fit.posterior
+    key = (id(post), i, n_draws, float(np.sum(post["beta"][:, i])))
+    if key in _CURVE_CACHE:
+        return _CURVE_CACHE[key]
+    p = subsample(post, n_draws)
+    beta, K, S = p["beta"][:, i], p["K"][:, i], p["S"][:, i]
+    umax = float(md.spend[:, i].max()) / md.spend_scale[i]
+    u = np.unique(np.concatenate([np.linspace(0, 3 * umax, 300), np.geomspace(umax * 1e-3, 3 * umax, 150)]))
+    med = np.median(hill_np(np.broadcast_to(u[None, :, None], (len(beta), len(u), 1)),
+                            K[:, None], S[:, None])[:, :, 0] * beta[:, None], axis=0)
+    fix_s = mmm.cfg.channels[i].saturation == "c"
+    norm = max(float(med.max()), 1e-300)
+
+    def resid(th):
+        b, k = np.exp(th[0]), np.exp(th[1])
+        s_ = 1.0 if fix_s else np.exp(th[2])
+        return (b * hill_np(u[:, None], np.array([k]), np.array([s_]))[:, 0] - med) / norm
+
+    x0 = np.log([max(float(np.median(beta)), 1e-12), max(float(np.median(K)), 1e-6),
+                 1.0 if fix_s else max(float(np.median(S)), 0.05)])
+    sol = least_squares(resid, x0, method="lm" if len(u) > 3 else "trf")
+    b, k = float(np.exp(sol.x[0])), float(np.exp(sol.x[1]))
+    s_ = 1.0 if fix_s else float(np.exp(sol.x[2]))
+    _CURVE_CACHE[key] = (b, k, s_)
+    return b, k, s_
+
+
+def curve_value(md: ModelData, params: tuple, i: int, x) -> np.ndarray:
+    """グラフの曲線の値（KPI）。x は週次出稿量（モデルの入力の単位）。"""
+    b, k, s_ = params
+    u = np.asarray(x, dtype=float) / md.spend_scale[i]
+    return b * md.y_scale * hill_np(u.reshape(-1, 1), np.array([k]), np.array([s_]))[:, 0].reshape(u.shape)
+
+
 def weekly_saturation(md: ModelData, mmm: BayesianMMM, fit: FitResult, n_draws: int = CURVE_DRAWS,
                       n_points: int = 160, max_ratio: float = 1.3,
                       optimal: pd.DataFrame | None = None,
@@ -291,6 +351,7 @@ def weekly_saturation(md: ModelData, mmm: BayesianMMM, fit: FitResult, n_draws: 
     点:   実績の各週の (adstock 後出稿額, 貢献) の事後平均
     """
     p = subsample(fit.posterior, n_draws)
+    pb = subsample(fit.posterior, BAND_DRAWS)  # 帯（信用区間）用
     w = adstock_weights_np(mmm.spec, p["alpha"], p["theta"])  # (D, L, C)
     ad = apply_adstock_np(mmm.xlag, w)  # (D, T, C) スケール済み
     contrib = hill_np(ad, p["K"], p["S"]) * p["beta"][:, None, :] * md.y_scale  # (D, T, C)
@@ -313,24 +374,24 @@ def weekly_saturation(md: ModelData, mmm: BayesianMMM, fit: FitResult, n_draws: 
         grid = np.unique(np.concatenate([np.linspace(0, xmax, n_points),
                                          np.geomspace(xmax * 1e-4, xmax, n_points // 2)]))
         xs = grid / md.spend_scale[i]
-        D = len(p["beta"])
-        g = np.broadcast_to(xs[None, :, None], (D, len(grid), 1))
-        yc = hill_np(g, p["K"][:, i:i + 1], p["S"][:, i:i + 1])[:, :, 0] * p["beta"][:, i:i + 1] \
-            * md.y_scale  # (D, len(grid))
-        lo, hi = _q(yc)
+        # 帯（信用区間）は点ごとの分位点なので、サンプルを増やしたうえで軽く平滑化して縁のぎざぎざを抑える
+        Db = len(pb["beta"])
+        gb = np.broadcast_to(xs[None, :, None], (Db, len(grid), 1))
+        yb = hill_np(gb, pb["K"][:, i:i + 1], pb["S"][:, i:i + 1])[:, :, 0] * pb["beta"][:, i:i + 1] * md.y_scale
+        lo, hi = (_smooth_edge(e) for e in _q(yb))
+        cp = curve_params(md, mmm, fit, i, n_draws)
+        smooth = curve_value(md, cp, i, grid)
+        lo, hi = np.minimum(lo, smooth), np.maximum(hi, smooth)
         for k in range(len(grid)):
             curve_rows.append({"channel": ch, "effective_spend": grid[k],
-                               "contribution_mean": float(np.median(yc[:, k])),  # 中央値の曲線
+                               "contribution_mean": float(smooth[k]),  # 中央値の曲線（なめらかにしたもの）
                                "contribution_lo": lo[k], "contribution_hi": hi[k]})
         # 週 t の出稿が持ち越しを含めて生む貢献の合計
         #  steady_contribution: 毎週この額を出稿している定常状態での値 = 曲線上の値（グラフの〇）
         #  attributed_contribution: 実績の出稿の並びで、各週の貢献を「その週に効いている出稿の内訳
         #                           （w_l × 出稿_{t-l}）」の比率で元の週に配分し直した値（合計は貢献総額と一致）
         x_s = md.spend[:, i] / md.spend_scale[i]
-        steady = (hill_np(np.broadcast_to(x_s[None, :, None], (len(p["beta"]), len(x_s), 1)),
-                          p["K"][:, i:i + 1], p["S"][:, i:i + 1])[:, :, 0]
-                  * p["beta"][:, i:i + 1] * md.y_scale)
-        steady = np.median(steady, axis=0)  # グラフの曲線（中央値）上の値
+        steady = curve_value(md, cp, i, md.spend[:, i])  # グラフの曲線上の値
         wm = w[:, :, i].mean(axis=0)  # (L,)
         eff_m = ad[:, :, i].mean(axis=0)  # (T,) スケール済み
         con_m = contrib[:, :, i].mean(axis=0)
@@ -370,16 +431,11 @@ def saturation_levels(md: ModelData, mmm: BayesianMMM, fit: FitResult,
         row = {"channel": ch, "max_weekly_spend": actual_max}
         # 線の位置は、レポートに描く曲線（事後中央値の曲線）が上限（事後平均）の p に達する出稿額。
         # 区間はサンプルごとの到達額から。
-        beta = p["beta"][:, i]
-        grid = np.geomspace(actual_max * 1e-4, actual_max * 1e3, 4000)
-        u = np.broadcast_to((grid / scale)[None, :, None], (len(K), len(grid), 1))
-        mean_curve = np.median(hill_np(u, K[:, None], S[:, None])[:, :, 0] * beta[:, None], axis=0)
-        frac = mean_curve / np.median(beta)  # 中央値の曲線が上限（中央値）の何割か
+        _, k_c, s_c = curve_params(md, mmm, fit, i, n_draws)
         for lv in levels:
             x = K * (lv / (1 - lv)) ** (1 / S) * scale
             tag = f"{int(round(lv * 100))}"
-            row[f"spend_at_{tag}"] = (float(np.interp(lv, frac, grid)) if frac[-1] >= lv
-                                      else float(np.median(x)))
+            row[f"spend_at_{tag}"] = float(k_c * (lv / (1 - lv)) ** (1 / s_c) * scale)
             row[f"spend_at_{tag}_lo"] = float(np.quantile(x, lo_q))
             row[f"spend_at_{tag}_hi"] = float(np.quantile(x, hi_q))
         rows.append(row)
@@ -399,25 +455,19 @@ def efficiency_zones(md: ModelData, mmm: BayesianMMM, fit: FitResult,
     rows = []
     for i, ch in enumerate(md.channel_names):
         scale = md.spend_scale[i]
-        K, S, beta = p["K"][:, i], p["S"][:, i], p["beta"][:, i]
+        S = p["S"][:, i]
         actual_max = float(md.spend[:, i].max())
-        grid = np.geomspace(actual_max * 1e-4, actual_max * 1e3, 6000)
-        u = np.broadcast_to((grid / scale)[None, :, None], (len(K), len(grid), 1))
-        mean_curve = np.median(hill_np(u, K[:, None], S[:, None])[:, :, 0] * beta[:, None], axis=0)
-        frac = mean_curve / np.median(beta)  # 中央値の曲線が上限（中央値）の何割か
-        x13 = float(np.interp(1 / 3, frac, grid)) if frac[-1] >= 1 / 3 else np.inf
-        x23 = float(np.interp(2 / 3, frac, grid)) if frac[-1] >= 2 / 3 else np.inf
+        _, k_c, s_c = curve_params(md, mmm, fit, i, n_draws)
+        # ヒル関数が上限の p に達する点 = K × (p/(1-p))^(1/S)、変曲点 = K × ((S-1)/(S+1))^(1/S)（S > 1）
+        x13 = float(k_c * 0.5 ** (1 / s_c) * scale)
+        x23 = float(k_c * 2.0 ** (1 / s_c) * scale)
         s_med = float(np.median(S))
-        s_shape = mmm.cfg.channels[i].saturation != "c" and s_med > 1.05
+        s_shape = mmm.cfg.channels[i].saturation != "c" and s_c > 1.05
         infl = np.nan
         if s_shape:
-            slope = np.gradient(mean_curve, grid)
-            j = int(np.argmax(slope))
-            # 傾きの最大が格子の左端（≒出稿 0）なら実質 C 字なので変曲点なし
-            if grid[j] > actual_max * 0.01:
-                infl = float(grid[j])
-            else:
-                s_shape = False
+            infl = float(k_c * ((s_c - 1) / (s_c + 1)) ** (1 / s_c) * scale)
+            if infl <= actual_max * 0.01:  # ほぼ出稿 0 が最も効率的 → 実質 C 字
+                infl, s_shape = np.nan, False
         rows.append({"channel": ch, "spend_at_third": x13, "spend_at_two_thirds": x23,
                      "s_shape": bool(s_shape), "inflection": infl, "S_median": s_med,
                      "max_weekly_spend": actual_max})
@@ -466,7 +516,8 @@ def cpa_levels(md: ModelData, mmm: BayesianMMM, fit: FitResult, thresholds,
         # 平均 CPA = 金額 ÷ KPI。GRP などで入れたチャネルは 出稿量 × 1 単位あたりの費用 で金額に換算
         cpa = grid[None, :] * md.cpu[i] / np.maximum(f, 1e-300)  # (D, n_grid)
 
-        cpa_mean = grid * md.cpu[i] / np.maximum(np.median(f, axis=0), 1e-300)  # 曲線（中央値）での平均 CPA
+        cp = curve_params(md, mmm, fit, i, n_draws)
+        cpa_mean = grid * md.cpu[i] / np.maximum(curve_value(md, cp, i, grid), 1e-300)  # グラフの曲線での平均 CPA
 
         def point_at(c):
             """事後中央値の曲線上で平均 CPA が c 以下になる最大の出稿額（グラフ上の読み取りと一致）。"""
@@ -554,9 +605,9 @@ def optimal_weekly_spend(md: ModelData, mmm: BayesianMMM, fit: FitResult, econ: 
         mp = mprofit(grid)
         # 線の位置: 事後中央値の曲線の傾き（= 限界利益 ROI の平均）が 1 になる最大の出稿額
         # グラフの曲線（中央値）の傾き × 粗利
-        f_med = np.median(beta * md.y_scale * hill_np(np.broadcast_to((grid / scale)[None, :, None],
-                                                                      (len(beta), len(grid), 1)), K, S)[:, :, 0], axis=0)
-        mp_mean = np.gradient(f_med, grid) * v / md.cpu[i]
+        b_c, k_c, s_c = curve_params(md, mmm, fit, i, n_draws)
+        mp_mean = (b_c * md.y_scale * _hill_marginal(grid / scale, np.array(k_c), np.array(s_c)) / scale
+                   * v / md.cpu[i])
         okm = mp_mean >= 1.0
         if not okm.any():
             opt_point = 0.0
