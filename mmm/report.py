@@ -419,6 +419,61 @@ def fig_weekly_saturation(curve: pd.DataFrame, points: pd.DataFrame, chans: list
     return _img(fig)
 
 
+def fig_efficiency_zones(curve: pd.DataFrame, points: pd.DataFrame, chans: list[str],
+                         zones: pd.DataFrame) -> str:
+    """最大効果の 1/3・2/3 で区切った 3 段階の背景（媒体のメインカラー、左ほど濃い）と、S 字の変曲点。
+    信頼区間は描かないシンプルな版。横軸 = その週の出稿額、縦軸 = 持ち越し込みの貢献。"""
+    n = len(chans)
+    cols = min(n, 3)
+    rows = int(np.ceil(n / cols))
+    fig, axes = plt.subplots(rows, cols, figsize=(4.2 * cols, 3.4 * rows), squeeze=False)
+    labeled = False
+    for i, ch in enumerate(chans):
+        ax = axes[i // cols][i % cols]
+        color = PALETTE[i % len(PALETTE)]
+        pt_ = points[points["channel"] == ch]
+        z = zones[zones["channel"] == ch].iloc[0]
+        x13, x23 = z["spend_at_third"], z["spend_at_two_thirds"]
+        pmax = float(pt_["spend"].max())
+        xlim = pmax * 1.3
+        if np.isfinite(x23):
+            xlim = max(xlim, min(x23 * 1.1, pmax * 3))
+        c = curve[(curve["channel"] == ch) & (curve["effective_spend"] <= xlim)]
+        right = float(c["effective_spend"].max())
+        # 背景: 0〜1/3（効率が良い）→ 1/3〜2/3（ほどほど）→ 2/3〜（飽和）の順に薄く
+        for a, b, al in ((0, x13, 0.30), (x13, x23, 0.14), (x23, right, 0.04)):
+            if np.isfinite(a) and a < right:
+                ax.axvspan(a, min(b, right) if np.isfinite(b) else right, color=color, alpha=al, lw=0, zorder=0)
+        ax.plot(c["effective_spend"], c["contribution_mean"], color=color, lw=2.0, zorder=2)
+        ax.scatter(pt_["spend"], pt_["steady_contribution"], s=16, facecolors="none",
+                   edgecolors="#1d2330", linewidths=0.7, alpha=0.7, zorder=3)
+        ytop = max(float(c["contribution_mean"].max()), float(pt_["steady_contribution"].max())) * 1.08
+        ax.set_ylim(0, ytop)
+        for xv, lab in ((x13, "1/3 of max"), (x23, "2/3 of max")):
+            if np.isfinite(xv) and xv <= right:
+                ax.axvline(xv, color=color, ls="--", lw=1.1, zorder=1)
+                ax.text(xv, ytop * 0.97, f" {lab}", fontsize=7, color="#1d2330", va="top")
+        if z["s_shape"] and np.isfinite(z["inflection"]) and z["inflection"] <= right:
+            ax.axvline(z["inflection"], color="#1d2330", ls="-.", lw=1.1, zorder=1,
+                       label="inflection point (S-shape: steepest = most efficient)" if not labeled else None)
+            labeled = True
+            ax.text(z["inflection"], ytop * 0.06, " inflection", fontsize=7, color="#1d2330", rotation=90,
+                    va="bottom")
+        ax.set_title(f"{ch}  (S-shape)" if z["s_shape"] else ch, fontsize=10)
+        ax.set_xlabel("weekly spend", fontsize=8)
+        ax.set_ylabel("contribution incl. carryover", fontsize=8)
+        ax.tick_params(labelsize=7)
+        ax.spines[["top", "right"]].set_visible(False)
+    for j in range(n, rows * cols):
+        axes[j // cols][j % cols].axis("off")
+    if labeled:
+        fig.legend(loc="lower center", fontsize=8, frameon=False, bbox_to_anchor=(0.5, -0.02))
+        fig.tight_layout(rect=(0, 0.05, 1, 1))
+    else:
+        fig.tight_layout()
+    return _img(fig)
+
+
 def fig_adstock(decay: pd.DataFrame) -> str:
     fig, ax = plt.subplots(figsize=(6.5, 3))
     for i, (ch, d) in enumerate(decay.groupby("channel", sort=False)):
@@ -501,7 +556,8 @@ def build_report(path, *, cfg, summ, dec, pred, metrics, curves, decay, diagnost
                  params: pd.DataFrame | None = None,
                  opt_min: dict | None = None,
                  share_ci: dict | None = None,
-                 ext_cols: list | None = None) -> None:
+                 ext_cols: list | None = None,
+                 zones: pd.DataFrame | None = None) -> None:
     IL = interval_label()
     hero_html = ""  # 冒頭で目立たせる「広告による増分のシェア」（下で total_kpi 等の計算後に作成）
     prior_html = ""
@@ -845,6 +901,33 @@ def build_report(path, *, cfg, summ, dec, pred, metrics, curves, decay, diagnost
                 + fig_weekly_saturation(weekly_curve, weekly_points, channels, None, None,
                                         xcol="spend", cpa=cpa_levels)
                 + cpa_html)
+        if zones is not None and len(zones):
+            def _z(v, mx):
+                if not np.isfinite(v):
+                    return "曲線の範囲外"
+                return f"{smart_num(v)}（実績最大の {v / mx:.0%}）" + (" ※実績の範囲外" if v > mx else "")
+            zv = pd.DataFrame({
+                "チャネル": zones["channel"],
+                "曲線の形": ["S 字" if s_ else "C 字" for s_ in zones["s_shape"]],
+                "変曲点（S 字：効率が最も良い点）": [(_z(v, m) if s_ else "—（C 字は出稿 0 が最も効率的）")
+                                         for v, m, s_ in zip(zones["inflection"], zones["max_weekly_spend"],
+                                                             zones["s_shape"])],
+                "最大効果の 1/3 に達する額": [_z(v, m) for v, m in zip(zones["spend_at_third"], zones["max_weekly_spend"])],
+                "最大効果の 2/3 に達する額": [_z(v, m) for v, m in zip(zones["spend_at_two_thirds"], zones["max_weekly_spend"])],
+                "実績の最大週次出稿額": zones["max_weekly_spend"],
+            })
+            weekly_html += (
+                '<h2>週次の飽和曲線と効率の 3 段階（最大効果の 1/3・2/3）</h2><p class="muted">'
+                '出稿上限を考えるためのシンプルな版です（信頼区間は表示していません）。'
+                '曲線が最大効果（出稿を増やし続けたときの上限）の 1/3・2/3 に達する週次出稿額で区切り、背景を 3 段階に塗っています：'
+                '<b>濃い = 0〜1/3（効率が最も良い部分）</b>、<b>中 = 1/3〜2/3（効率がほどほどの部分）</b>、'
+                '<b>薄い = 2/3〜（飽和が進み効率が落ちる部分）</b>。'
+                '「効率が最も良い部分まで出稿するなら 1/3 の線まで」「ほどほどの効率の範囲で最大限出すなら 2/3 の線まで」と読めます。'
+                '<b>S 字の媒体</b>（タイトルに S-shape）は出稿の最初のうち効きにくいため、0〜1/3 の前半は効率が良くありません。'
+                'S 字では曲線の傾きが最も急な<b>変曲点</b>（一点鎖線）が効率の最も良い点で、少なくともそこまでは出稿しないと効率が出ません。'
+                '線の位置はグラフに描いた曲線（推定の平均）から計算しています。毎週同じ額を出稿し続ける前提の値です。</p>'
+                + fig_efficiency_zones(weekly_curve, weekly_points, channels, zones)
+                + f'<div class="scroll">{_table(zv, {"実績の最大週次出稿額": smart_num})}</div>')
         weekly_html += ('<h2>週次の飽和曲線と実績（横軸＝adstock 後の出稿額）</h2><p class="muted">横軸 = その週に効いている出稿額'
                        '（adstock 適用後。過去の出稿の持ち越しを含み、単位は出稿額と同じ）、縦軸 = その週の貢献。'
                        f'線は推定した飽和曲線（帯は {IL} 区間）、〇は実績の各週。〇が曲線の平らな部分に多いほど、'

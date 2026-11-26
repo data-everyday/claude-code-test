@@ -610,3 +610,27 @@ def test_cpa_common_lines_need_meaningful_range(tmp_path):
     if tiny:
         cl2 = cpa_levels(md, mmm, fit, sorted(set(tiny))[:2], auto=True)
         assert (cl2["source"] == "自動").any()
+
+
+def test_efficiency_zones(tmp_path):
+    from mmm.analysis import efficiency_zones, weekly_saturation
+
+    cfg = load_config(_write_cfg(tmp_path))
+    df = pd.read_csv(tmp_path / "d.csv")
+    md = build_model_data(validate_dataframe(df, cfg), cfg)
+    mmm = BayesianMMM(cfg, md)
+    fit = mmm.fit()
+    z = efficiency_zones(md, mmm, fit)
+    assert (z["spend_at_third"] < z["spend_at_two_thirds"]).all()
+    curve, _ = weekly_saturation(md, mmm, fit)
+    p = fit.posterior
+    for i, ch in enumerate(md.channel_names):
+        c = curve[curve["channel"] == ch]
+        top = p["beta"][:, i].mean() * md.y_scale
+        x13 = z.loc[i, "spend_at_third"]
+        if x13 <= c["effective_spend"].max():  # グラフの曲線上で 1/3 の高さ
+            assert np.interp(x13, c["effective_spend"], c["contribution_mean"]) / top == pytest.approx(1 / 3, abs=0.02)
+        if z.loc[i, "s_shape"]:  # 変曲点は 1/3 より手前〜付近（Hill の S 字では 0 < 変曲点）
+            assert 0 < z.loc[i, "inflection"] < z.loc[i, "spend_at_two_thirds"]
+        else:
+            assert np.isnan(z.loc[i, "inflection"])

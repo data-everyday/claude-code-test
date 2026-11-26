@@ -379,6 +379,44 @@ def saturation_levels(md: ModelData, mmm: BayesianMMM, fit: FitResult,
     return pd.DataFrame(rows)
 
 
+def efficiency_zones(md: ModelData, mmm: BayesianMMM, fit: FitResult,
+                     n_draws: int = CURVE_DRAWS) -> pd.DataFrame:
+    """最大効果の 1/3・2/3 に達する週次出稿額と、S 字の場合の変曲点（効率が最も良い点）。
+
+    いずれもレポートに描く事後平均の曲線から求める（グラフ上の読み取りと一致）。
+      - x_1/3, x_2/3: 曲線が上限（事後平均）の 1/3・2/3 に達する出稿額
+      - 変曲点: 曲線の傾き（追加 1 円あたりの効果）が最大になる出稿額。S 字のときだけ意味を持つ
+        （C 字は出稿 0 で傾きが最大）
+    """
+    p = subsample(fit.posterior, n_draws)
+    rows = []
+    for i, ch in enumerate(md.channel_names):
+        scale = md.spend_scale[i]
+        K, S, beta = p["K"][:, i], p["S"][:, i], p["beta"][:, i]
+        actual_max = float(md.spend[:, i].max())
+        grid = np.geomspace(actual_max * 1e-4, actual_max * 1e3, 6000)
+        u = np.broadcast_to((grid / scale)[None, :, None], (len(K), len(grid), 1))
+        mean_curve = (hill_np(u, K[:, None], S[:, None])[:, :, 0] * beta[:, None]).mean(axis=0)
+        frac = mean_curve / beta.mean()
+        x13 = float(np.interp(1 / 3, frac, grid)) if frac[-1] >= 1 / 3 else np.inf
+        x23 = float(np.interp(2 / 3, frac, grid)) if frac[-1] >= 2 / 3 else np.inf
+        s_med = float(np.median(S))
+        s_shape = mmm.cfg.channels[i].saturation != "c" and s_med > 1.05
+        infl = np.nan
+        if s_shape:
+            slope = np.gradient(mean_curve, grid)
+            j = int(np.argmax(slope))
+            # 傾きの最大が格子の左端（≒出稿 0）なら実質 C 字なので変曲点なし
+            if grid[j] > actual_max * 0.01:
+                infl = float(grid[j])
+            else:
+                s_shape = False
+        rows.append({"channel": ch, "spend_at_third": x13, "spend_at_two_thirds": x23,
+                     "s_shape": bool(s_shape), "inflection": infl, "S_median": s_med,
+                     "max_weekly_spend": actual_max})
+    return pd.DataFrame(rows)
+
+
 def _nice_values(lo: float, hi: float, n: int = 4) -> list[float]:
     """lo〜hi の範囲から、きりのよい金額（1, 1.2, 1.5, 2, 2.5, 3, … 9 × 10^k）を n 個選ぶ。"""
     if not (np.isfinite(lo) and np.isfinite(hi)) or hi <= lo or lo <= 0:

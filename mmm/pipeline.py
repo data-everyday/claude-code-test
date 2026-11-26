@@ -60,6 +60,7 @@ def run(cfg: Config) -> dict:
     opt_line = (analysis.optimal_weekly_spend(md, mmm, fit, cfg.economics)
                 if cfg.economics else None)
     sat_levels = analysis.saturation_levels(md, mmm, fit)
+    zones = analysis.efficiency_zones(md, mmm, fit)
     cpa_df = (analysis.cpa_levels(md, mmm, fit, cfg.cpa_lines, cfg.cpa_lines_per_channel,
                                   auto=cfg.cpa_lines_auto)
               if (cfg.cpa_lines or cfg.cpa_lines_per_channel or cfg.cpa_lines_auto) else None)
@@ -107,6 +108,7 @@ def run(cfg: Config) -> dict:
     wk_curve.to_csv(out / "weekly_saturation_curve.csv", index=False)
     wk_points.to_csv(out / "weekly_saturation_points.csv", index=False)
     sat_levels.to_csv(out / "saturation_levels.csv", index=False)
+    zones.to_csv(out / "efficiency_zones.csv", index=False)
     if cpa_df is not None:
         cpa_df.to_csv(out / "cpa_levels.csv", index=False)
     if opt_line is not None:
@@ -141,7 +143,7 @@ def run(cfg: Config) -> dict:
                  optimal_line=opt_line, events=events_df,
                  sat_levels=sat_levels, cpa_levels=cpa_df,
                  controls=(ctl_sum, ctl_weekly), settings=settings, params=params_df,
-                 opt_min=opt_min, share_ci=share_ci,
+                 opt_min=opt_min, share_ci=share_ci, zones=zones,
                  ext_cols=ext_cols if cfg.decomp_show_external else [])
     log.info("レポート出力: %s", report_path)
 
