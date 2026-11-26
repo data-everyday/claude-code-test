@@ -583,3 +583,30 @@ def test_minimize_spend(tmp_path):
     r90 = minimize_spend(md, mmm, fit, {**cfg.optimization, "kpi_target_ratio": 0.9})
     assert r90["minimum_budget"] <= r["minimum_budget"] + 1e-6
     assert r90["optimal_total_contribution"] >= r90["current_total_contribution"] * 0.9 * (1 - 1e-3)
+
+
+def test_cpa_common_lines_need_meaningful_range(tmp_path):
+    """共通の金額は、実績最大の 10%〜130% に 2 本以上入るときだけ使う（原点ぎりぎりの線では数えない）。"""
+    from mmm.analysis import MIN_LINE_RATIO, cpa_levels
+
+    cfg = load_config(_write_cfg(tmp_path))
+    df = pd.read_csv(tmp_path / "d.csv")
+    md = build_model_data(validate_dataframe(df, cfg), cfg)
+    mmm = BayesianMMM(cfg, md)
+    fit = mmm.fit()
+    ths = list(np.geomspace(1e-3, 1e3, 13))
+    cl = cpa_levels(md, mmm, fit, ths, auto=True)
+    for ch, g in cl.groupby("channel"):
+        if (g["source"] == "共通").all():
+            inside = ((g["spend_at_cpa"] >= g["max_weekly_spend"] * MIN_LINE_RATIO) &
+                      (g["spend_at_cpa"] <= g["max_weekly_spend"] * 1.3)).sum()
+            assert inside >= 2, ch
+    # 原点ぎりぎりにしか来ない金額だけを渡すと、自動に切り替わる
+    tiny = []
+    for ch in md.channel_names:
+        g = cl[(cl["channel"] == ch) & (cl["spend_at_cpa"] > 0) &
+               (cl["spend_at_cpa"] < cl["max_weekly_spend"] * MIN_LINE_RATIO)]
+        tiny += list(g["cpa"])
+    if tiny:
+        cl2 = cpa_levels(md, mmm, fit, sorted(set(tiny))[:2], auto=True)
+        assert (cl2["source"] == "自動").any()

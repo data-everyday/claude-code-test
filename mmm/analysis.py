@@ -265,6 +265,8 @@ def response_curves(md: ModelData, mmm: BayesianMMM, fit: FitResult,
 
 # 週次飽和曲線と、その上に引く線（25/50/75%・CPA・最適ライン）は同じ事後サンプルを使う
 CURVE_DRAWS = 400
+# CPA ラインは、実績の最大週次出稿額のこの割合より左（データがほぼない範囲）には引かない
+MIN_LINE_RATIO = 0.1
 
 
 def weekly_saturation(md: ModelData, mmm: BayesianMMM, fit: FitResult, n_draws: int = CURVE_DRAWS,
@@ -444,13 +446,16 @@ def cpa_levels(md: ModelData, mmm: BayesianMMM, fit: FitResult, thresholds,
         else:
             ths, src = list(thresholds), "共通"
             if auto:
-                in_plot = sum(1 for c in ths if 0 < point_at(c) <= actual_max * plot_ratio)
+                # 実績の最大週次出稿額の 10%〜130% に入る線だけを数える
+                # （原点のごく近くはデータがほぼない範囲で、事後平均の曲線の立ち上がりに左右されるため）
+                in_plot = sum(1 for c in ths
+                              if actual_max * MIN_LINE_RATIO <= point_at(c) <= actual_max * plot_ratio)
                 if in_plot < 2:
                     # グラフ範囲内で、平均 CPA（事後中央値の曲線）が最小になる点からグラフ右端までの
                     # CPA の幅から選ぶ（S 字の少額側の高い CPA は除外し、上限側の交点がグラフ内に入るように）
                     cpa_med = cpa_mean
                     # 実績最大の 10%〜130% の範囲で（原点ぎりぎりの線は実用的でないため除く）
-                    rng = np.flatnonzero((grid >= actual_max * 0.1) & (grid <= actual_max * plot_ratio))
+                    rng = np.flatnonzero((grid >= actual_max * MIN_LINE_RATIO) & (grid <= actual_max * plot_ratio))
                     lo_c = float(cpa_med[rng].min())
                     hi_c = float(cpa_med[rng[-1]])
                     auto_ths = _nice_values(lo_c * 1.02, hi_c)

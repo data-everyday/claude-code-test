@@ -17,7 +17,7 @@ import matplotlib.ticker  # noqa: E402,F401
 import numpy as np  # noqa: E402
 import pandas as pd  # noqa: E402
 
-from .analysis import interval_label  # noqa: E402
+from .analysis import MIN_LINE_RATIO, interval_label  # noqa: E402
 
 PALETTE = ["#2a6fdb", "#e8743b", "#19a979", "#945ecf", "#13a4b4", "#d64f8f", "#bf9b30",
            "#6f7c91"]
@@ -395,7 +395,8 @@ def fig_weekly_saturation(curve: pd.DataFrame, points: pd.DataFrame, chans: list
             ybot = ax.get_ylim()[1]
             for _, r in cpa[cpa["channel"] == ch].iterrows():
                 xv = r["spend_at_cpa"]
-                if np.isfinite(xv) and 0 < xv <= right:
+                # 実績の最大週次出稿額の 10% 未満（データがほぼない範囲）の線は描かない
+                if np.isfinite(xv) and r["max_weekly_spend"] * MIN_LINE_RATIO <= xv <= right:
                     ax.axvline(xv, color=CPA_COLOR, ls=(0, (1, 2)), lw=1.1, zorder=1,
                                label="average CPA lines (spend / KPI)" if not cpa_labeled else None)
                     cpa_labeled = True
@@ -793,6 +794,8 @@ def build_report(path, *, cfg, summ, dec, pred, metrics, curves, decay, diagnost
                 return "実績の 5 倍以上"
             hi = "5 倍以上" if not np.isfinite(r["spend_at_cpa_hi"]) else smart_num(r["spend_at_cpa_hi"])
             out = f"{smart_num(v)}（{smart_num(r['spend_at_cpa_lo'])}〜{hi}）"
+            if v < r["max_weekly_spend"] * MIN_LINE_RATIO:
+                return out + " ※データの少ない範囲（グラフには描かない）"
             return out + (" ※実績の範囲外" if v > r["max_weekly_spend"] else "")
 
         cv = pd.DataFrame({
@@ -833,7 +836,9 @@ def build_report(path, *, cfg, summ, dec, pred, metrics, curves, decay, diagnost
                 f'上と同じ飽和曲線に、平均 CPA（その週の出稿額 ÷ その出稿で得た{K}、持ち越し込み）が各金額に達する'
                 '週次出稿額の線（茶色の点線、ラベル CPA ○k、k = 千円）を引いています。'
                 '出稿を増やすほど飽和で平均 CPA は上がるので、各線は「この額までなら 1 あたり平均 ○円以内で獲得できる」上限の目安です。'
-                '全媒体共通の金額が 2 本未満しか引けない媒体は、その媒体の CPA の水準に合わせた金額を自動で選んでいます（表の「線の決め方」）。'
+                '全媒体共通の金額の線が、実績の最大週次出稿額の 10%〜130% の範囲に 2 本未満しか入らない媒体は、'
+                'その媒体の CPA の水準に合わせた金額を自動で選んでいます（表の「線の決め方」）。'
+                '実績の最大週次出稿額の 10% 未満の位置になる線は、データがほとんどない範囲で信頼できないため描いていません。'
                 'グラフの範囲外の線は描いていません。毎週同じ額を出稿し続ける前提の値です。'
                 '線の位置はグラフに描いた曲線（推定の平均）から計算しているので、線の位置の「出稿額 ÷ 曲線の高さ」がラベルの CPA になります。'
                 '表の区間は推定の不確かさを反映した範囲です。</p>'
