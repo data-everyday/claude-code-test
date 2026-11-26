@@ -645,8 +645,18 @@ def test_efficiency_zones(tmp_path):
             assert np.interp(x13, c["effective_spend"], c["contribution_mean"]) / top == pytest.approx(1 / 3, abs=0.02)
         if z.loc[i, "s_shape"]:  # 変曲点は 1/3 より手前〜付近（Hill の S 字では 0 < 変曲点）
             assert 0 < z.loc[i, "inflection"] < z.loc[i, "spend_at_two_thirds"]
+            # ROI 最大の点は変曲点より右で、そこでは 曲線の傾き = 貢献 ÷ 出稿（原点からの直線が接する）
+            mr = z.loc[i, "max_roi"]
+            assert mr > z.loc[i, "inflection"]
+            from mmm.analysis import curve_value
+            cp = curve_params(md, mmm, fit, i)
+            h = mr * 1e-4
+            slope = (curve_value(md, cp, i, mr + h) - curve_value(md, cp, i, mr - h)) / (2 * h)
+            assert float(slope) == pytest.approx(float(curve_value(md, cp, i, mr)) / mr, rel=1e-3)
+            grid = np.linspace(mr * 0.05, mr * 5, 400)
+            assert np.argmax(curve_value(md, cp, i, grid) / grid) == pytest.approx(np.argmin(np.abs(grid - mr)), abs=2)
         else:
-            assert np.isnan(z.loc[i, "inflection"])
+            assert np.isnan(z.loc[i, "inflection"]) and np.isnan(z.loc[i, "max_roi"])
 
 
 def test_forecast(tmp_path):

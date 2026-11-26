@@ -447,6 +447,7 @@ def efficiency_zones(md: ModelData, mmm: BayesianMMM, fit: FitResult,
     """最大効果の 1/3・2/3 に達する週次出稿額と、S 字の場合の変曲点（効率が最も良い点）。
 
     いずれもレポートに描く事後中央値の曲線から求める（グラフ上の読み取りと一致）。
+      - max_roi: 平均 ROI（貢献 ÷ 出稿）が最大になる出稿額（S 字のみ。変曲点 = 限界 ROI 最大の点より右）
       - x_1/3, x_2/3: 曲線が上限（事後平均）の 1/3・2/3 に達する出稿額
       - 変曲点: 曲線の傾き（追加 1 円あたりの効果）が最大になる出稿額。S 字のときだけ意味を持つ
         （C 字は出稿 0 で傾きが最大）
@@ -463,13 +464,18 @@ def efficiency_zones(md: ModelData, mmm: BayesianMMM, fit: FitResult,
         x23 = float(k_c * 2.0 ** (1 / s_c) * scale)
         s_med = float(np.median(S))
         s_shape = mmm.cfg.channels[i].saturation != "c" and s_c > 1.05
-        infl = np.nan
+        infl = max_roi = np.nan
         if s_shape:
             infl = float(k_c * ((s_c - 1) / (s_c + 1)) ** (1 / s_c) * scale)
             if infl <= actual_max * 0.01:  # ほぼ出稿 0 が最も効率的 → 実質 C 字
                 infl, s_shape = np.nan, False
+            else:
+                # 平均 ROI（貢献 ÷ 出稿）が最大になる点 = 原点からの直線が曲線に接する点。
+                # u^S/(u^S+K^S) ÷ u を微分して 0 → u = K × (S-1)^(1/S)（変曲点より右）。
+                # C 字（S ≤ 1）では平均 ROI も限界 ROI も出稿 0 で最大になり、点は現れない
+                max_roi = float(k_c * (s_c - 1) ** (1 / s_c) * scale)
         rows.append({"channel": ch, "spend_at_third": x13, "spend_at_two_thirds": x23,
-                     "s_shape": bool(s_shape), "inflection": infl, "S_median": s_med,
+                     "s_shape": bool(s_shape), "inflection": infl, "max_roi": max_roi, "S_median": s_med,
                      "max_weekly_spend": actual_max})
     return pd.DataFrame(rows)
 
