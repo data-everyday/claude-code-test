@@ -254,7 +254,7 @@ economics:
 | `model_settings_*.csv` | モデルの設定（目的変数・広告チャネル・広告以外の変数・事前分布・推定の設定） |
 | `estimated_params.csv` | 推定された adstock（α・θ・半減期）とヒル関数（K・S）のパラメータ |
 | `channel_summary.csv` | チャネル別 総貢献・貢献シェア・ROI(区間)・限界ROI・adstock/Hill パラメータ |
-| `decomposition.csv` | 週次の貢献度分解（baseline + 各チャネル） |
+| `decomposition.csv` | 週次の貢献度分解（baseline = 外部要因を含むベースライン、base_excl_external = 外部要因を除くベースライン、ext:○○ = 外部要因の効果、各チャネル） |
 | `predictions.csv` / `fit_metrics.csv` | 予測値と精度指標 |
 | `holdout_metrics.csv` | ホールドアウト検証結果 |
 | `response_curves.csv` | 期間合計の応答曲線（支出 0〜2 倍） |

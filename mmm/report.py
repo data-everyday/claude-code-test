@@ -87,14 +87,55 @@ def fig_fit(pred: pd.DataFrame) -> str:
     return _img(fig)
 
 
-def fig_decomp(dec: pd.DataFrame, channels: list[str]) -> str:
-    fig, ax = plt.subplots(figsize=(11, 3.8))
-    series = [dec["baseline"].clip(lower=0)] + [dec[c] for c in channels]
-    ax.stackplot(dec["date"], *series, labels=["baseline"] + channels,
-                 colors=["#c9ced6"] + PALETTE[: len(channels)], alpha=0.9)
-    ax.plot(dec["date"], dec["actual"], color="#222", lw=1, label="actual")
-    ax.legend(loc="upper left", fontsize=8, frameon=False, ncol=len(channels) + 2)
+EXT_COLORS = ["#8c6d31", "#bd9e39", "#e7cb94", "#843c39", "#ad494a", "#d6616b", "#7b4173",
+              "#a55194", "#ce6dbd", "#637939", "#8ca252", "#b5cf6b"]
+
+
+def fig_decomp(dec: pd.DataFrame, channels: list[str], ext_cols: list[str] | None = None) -> str:
+    """週次の貢献度分解。ext_cols（外部要因）があれば、ベースラインから分けて表示する。
+
+    ベースライン（外部要因を除く）を下に置き、プラスの効果（広告・外部要因のプラス分）を上に積み上げ、
+    外部要因のマイナス分はベースラインの上端から下向きに描く（その分ベースラインの見えている面積が減る）。
+    """
+    ext_cols = [c for c in (ext_cols or []) if c in dec]
+    fig, ax = plt.subplots(figsize=(11, 4.2 if ext_cols else 3.8))
+    x = pd.to_datetime(dec["date"])
+    if not ext_cols:
+        series = [dec["baseline"].clip(lower=0)] + [dec[c] for c in channels]
+        ax.stackplot(x, *series, labels=["baseline"] + channels,
+                     colors=["#c9ced6"] + PALETTE[: len(channels)], alpha=0.9)
+        ax.plot(x, dec["actual"], color="#222", lw=1, label="actual")
+        ax.legend(loc="upper left", fontsize=8, frameon=False, ncol=len(channels) + 2)
+    else:
+        base = dec["base_excl_external"].clip(lower=0).to_numpy()
+        ax.fill_between(x, 0, base, color="#c9ced6", alpha=0.9, lw=0, label="baseline (excl. external)")
+        top = base.copy()
+        # 外部要因のプラス分 → 広告 の順に上へ積む
+        for j, c in enumerate(ext_cols):
+            v = dec[c].clip(lower=0).to_numpy()
+            if (v > 0).any():
+                ax.fill_between(x, top, top + v, color=EXT_COLORS[j % len(EXT_COLORS)], alpha=0.9, lw=0,
+                                label=c.replace("ext:", ""))
+            top = top + v
+        for i, c in enumerate(channels):
+            v = dec[c].to_numpy()
+            ax.fill_between(x, top, top + v, color=PALETTE[i % len(PALETTE)], alpha=0.9, lw=0, label=c)
+            top = top + v
+        # 外部要因のマイナス分 → ベースラインの上端から下向きに
+        bottom = base.copy()
+        for j, c in enumerate(ext_cols):
+            v = dec[c].clip(upper=0).to_numpy()
+            if (v < 0).any():
+                has_pos = (dec[c] > 0).any()
+                ax.fill_between(x, bottom + v, bottom, color=EXT_COLORS[j % len(EXT_COLORS)], alpha=0.9,
+                                lw=0, hatch="///", edgecolor="white",
+                                label=None if has_pos else c.replace("ext:", "") + " (negative)")
+            bottom = bottom + v
+        ax.plot(x, dec["actual"], color="#222", lw=1, label="actual")
+        ax.legend(loc="upper center", bbox_to_anchor=(0.5, -0.12), fontsize=8, frameon=False,
+                  ncol=min(6, len(channels) + len(ext_cols) + 2))
     ax.spines[["top", "right"]].set_visible(False)
+    fig.tight_layout()
     return _img(fig)
 
 
@@ -458,7 +499,8 @@ def build_report(path, *, cfg, summ, dec, pred, metrics, curves, decay, diagnost
                  settings: dict | None = None,
                  params: pd.DataFrame | None = None,
                  opt_min: dict | None = None,
-                 share_ci: dict | None = None) -> None:
+                 share_ci: dict | None = None,
+                 ext_cols: list | None = None) -> None:
     IL = interval_label()
     hero_html = ""  # 冒頭で目立たせる「広告による増分のシェア」（下で total_kpi 等の計算後に作成）
     prior_html = ""
@@ -475,6 +517,13 @@ def build_report(path, *, cfg, summ, dec, pred, metrics, curves, decay, diagnost
     blended_roi = total_contrib / total_spend
     blended_cpa = total_spend / total_contrib if total_contrib > 0 else float("nan")
     weeks = len(dec)
+    decomp_note = ""
+    if ext_cols:
+        decomp_note = (f'<p class="muted">{K}を、ベースライン（トレンド・季節性・切片）、外部要因（コントロール変数・イベント）、'
+                       '広告チャネルに分解しています。外部要因のプラスの効果は上に積み上げ、マイナスの効果（斜線）はベースラインの'
+                       '上端から下向きに描いています。外部要因の効果は、0/1 の変数（イベント・プロモなど）は「なかった場合」との差、'
+                       '連続の変数（価格など）は「期間平均の水準だった場合」との差です（詳しくは「広告以外の要因の貢献」）。'
+                       '週ごとの値は decomposition.csv（ext: で始まる列）。</p>')
     ci_txt = (f"{IL}区間 {share_ci['lo']:.1%}〜{share_ci['hi']:.1%}" if share_ci else "")
     prior_txt = (f"／事前の想定 {prior_share['median']:.0%}" if prior_share else "")
     hero_html = (
@@ -872,7 +921,8 @@ KPI（目的変数）{K}（列名 {html.escape(cfg.target_column)}）／ チャ�
 {fig_fit(pred)}
 
 <h2>貢献度分解</h2>
-{fig_decomp(dec, channels)}
+{decomp_note}
+{fig_decomp(dec, channels, ext_cols)}
 
 {base_html}
 

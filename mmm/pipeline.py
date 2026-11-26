@@ -4,6 +4,7 @@ from __future__ import annotations
 import logging
 
 import numpy as np
+import pandas as pd
 
 from . import analysis
 from .config import Config
@@ -69,6 +70,18 @@ def run(cfg: Config) -> dict:
     share_ci = analysis.media_share(md, fit)
     events_df = analysis.event_effects(md, fit, cfg)
     ctl_sum, ctl_weekly = analysis.control_contributions(md, fit)
+    ext_cols = []
+    if len(ctl_weekly):
+        # 貢献度分解に外部要因（コントロール変数・イベント）の効果を列として追加し、
+        # ベースラインから外部要因を除いた列 base_excl_external も作る
+        wide = ctl_weekly.pivot(index="date", columns="variable", values="contribution")
+        wide = wide.reindex(index=pd.to_datetime(dec["date"]).values)[list(ctl_sum["variable"])]
+        for v in wide.columns:
+            col = f"ext:{v}"
+            dec[col] = wide[v].to_numpy()
+            ext_cols.append(col)
+        dec.insert(dec.columns.get_loc("baseline") + 1, "base_excl_external",
+                   dec["baseline"] - dec[ext_cols].sum(axis=1))
     settings = analysis.model_settings(cfg, md, mmm)
     params_df = analysis.estimated_params(md, mmm, fit)
     cp_dates = list(md.dates.iloc[md.changepoint_index]) if len(md.changepoint_index) else []
@@ -128,7 +141,8 @@ def run(cfg: Config) -> dict:
                  optimal_line=opt_line, events=events_df,
                  sat_levels=sat_levels, cpa_levels=cpa_df,
                  controls=(ctl_sum, ctl_weekly), settings=settings, params=params_df,
-                 opt_min=opt_min, share_ci=share_ci)
+                 opt_min=opt_min, share_ci=share_ci,
+                 ext_cols=ext_cols if cfg.decomp_show_external else [])
     log.info("レポート出力: %s", report_path)
 
     if cfg.output_bq.get("enabled"):

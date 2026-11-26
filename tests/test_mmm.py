@@ -133,6 +133,11 @@ def test_end_to_end_positive_effects(tmp_path):
     assert hm.loc["train", "period_end"] < hm.loc["test", "period_start"]
     html_txt = res["report"].read_text(encoding="utf-8")
     assert 'class="hero"' in html_txt and "広告による増分" in html_txt
+    dec = pd.read_csv(cfg.output_dir / "decomposition.csv")
+    ext = [c for c in dec.columns if c.startswith("ext:")]
+    assert "ext:price" in ext and "ext:promo" in ext
+    # baseline（外部要因を含む）= 外部要因を除いたベースライン + 外部要因の合計
+    np.testing.assert_allclose(dec["baseline"], dec["base_excl_external"] + dec[ext].sum(axis=1), rtol=1e-9)
     assert "学習期間（train）" in html_txt and "テスト期間（test）" in html_txt
     opt = res["optimization"]["table"]
     assert opt["optimal_spend"].sum() == pytest.approx(opt["current_spend"].sum(), rel=1e-4)

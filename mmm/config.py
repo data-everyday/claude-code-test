@@ -68,6 +68,7 @@ class Config:
     cpa_lines: list[float] = field(default_factory=lambda: [30000, 50000, 100000, 150000])
     cpa_lines_per_channel: dict[str, list[float]] = field(default_factory=dict)
     cpa_lines_auto: bool = True
+    decomp_show_external: bool = True  # 貢献度分解に外部要因（コントロール・イベント）を分けて表示
     scenarios: list[dict[str, Any]] = field(default_factory=list)
 
 
@@ -382,5 +383,6 @@ def load_config(path: str | Path, overrides: dict[str, Any] | None = None) -> Co
         cpa_lines_per_channel={str(k): [float(x) for x in (v or []) if float(x) > 0]
                                for k, v in (_get(raw, "report.cpa_lines_per_channel", {}) or {}).items()},
         cpa_lines_auto=bool(_get(raw, "report.cpa_lines_auto", True)),
+        decomp_show_external=bool(_get(raw, "report.decomp_show_external", True)),
         scenarios=_get(raw, "scenarios", []) or [],
     )
