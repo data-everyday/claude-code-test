@@ -246,7 +246,7 @@ def build_forecast_plan(*, weeks: int, grp_channel: str = "", grp_column: str = 
 
 
 # Colab ノートブックの版（ノートブック側の版がこれより古いと ① で注意を出す）
-NOTEBOOK_VERSIONS = {"cx5": "2026-11-26c"}
+NOTEBOOK_VERSIONS = {"cx5": "2026-11-26d"}
 
 
 def check_notebook_version(kind: str, version: str) -> str | None:
