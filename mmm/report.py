@@ -455,9 +455,10 @@ MAXROI_COLOR = "#1d4ed8"  # ROI 最大
 
 
 def fig_efficiency_zones(curve: pd.DataFrame, points: pd.DataFrame, chans: list[str],
-                         zones: pd.DataFrame) -> str:
-    """最大効果の 1/3・2/3 で区切った 3 段階の背景（媒体のメインカラー、左ほど濃い）と、S 字の変曲点。
-    信頼区間は描かないシンプルな版。横軸 = その週の出稿額、縦軸 = 持ち越し込みの貢献。"""
+                         zones: pd.DataFrame, mode: str = "zones") -> str:
+    """信頼区間を描かないシンプルな週次飽和曲線。横軸 = その週の出稿額、縦軸 = 持ち越し込みの貢献。
+    mode="zones": 最大効果の 1/3・2/3 で区切った 3 段階の背景（媒体のメインカラー、左ほど濃い）と破線。
+    mode="points": 限界ROI最大（変曲点）と ROI最大の縦線（S 字のみ）。"""
     n = len(chans)
     cols = min(n, 3)
     rows = int(np.ceil(n / cols))
@@ -471,12 +472,14 @@ def fig_efficiency_zones(curve: pd.DataFrame, points: pd.DataFrame, chans: list[
         x13, x23 = z["spend_at_third"], z["spend_at_two_thirds"]
         pmax = float(pt_["spend"].max())
         xlim = pmax * 1.3
-        if np.isfinite(x23):
+        if mode == "zones" and np.isfinite(x23):
             xlim = max(xlim, min(x23 * 1.1, pmax * 3))
+        if mode == "points" and z["s_shape"] and np.isfinite(z.get("max_roi", np.nan)):
+            xlim = max(xlim, min(float(z["max_roi"]) * 1.15, pmax * 3))
         c = curve[(curve["channel"] == ch) & (curve["effective_spend"] <= xlim)]
         right = float(c["effective_spend"].max())
         # 背景: 0〜1/3（効率が良い）→ 1/3〜2/3（ほどほど）→ 2/3〜（飽和）の順に薄く
-        for a, b, al in ((0, x13, 0.30), (x13, x23, 0.14), (x23, right, 0.04)):
+        for a, b, al in (((0, x13, 0.30), (x13, x23, 0.14), (x23, right, 0.04)) if mode == "zones" else ()):
             if np.isfinite(a) and a < right:
                 ax.axvspan(a, min(b, right) if np.isfinite(b) else right, color=color, alpha=al, lw=0, zorder=0)
         ax.plot(c["effective_spend"], c["contribution_mean"], color=color, lw=2.0, zorder=2)
@@ -484,23 +487,22 @@ def fig_efficiency_zones(curve: pd.DataFrame, points: pd.DataFrame, chans: list[
                    edgecolors="#1d2330", linewidths=0.7, alpha=0.7, zorder=3)
         ytop = max(float(c["contribution_mean"].max()), float(pt_["steady_contribution"].max())) * 1.08
         ax.set_ylim(0, ytop)
-        for xv in (x13, x23):
+        for xv in ((x13, x23) if mode == "zones" else ()):
             if np.isfinite(xv) and xv <= right:
                 ax.axvline(xv, color=color, ls="--", lw=1.1, zorder=1)
         cx, cy = c["effective_spend"].to_numpy(), c["contribution_mean"].to_numpy()
-        if z["s_shape"] and np.isfinite(z["inflection"]) and z["inflection"] <= right:
+        if mode == "points" and z["s_shape"] and np.isfinite(z["inflection"]) and z["inflection"] <= right:
             xi = float(z["inflection"])
             ax.axvline(xi, color=MROI_COLOR, ls="-.", lw=1.1, zorder=1)
             ax.scatter([xi], [np.interp(xi, cx, cy)], s=46, color=MROI_COLOR, zorder=5,
                        label="max marginal ROI (inflection point)" if not labeled else None)
             labeled = True
         mr = z.get("max_roi", np.nan)
-        if z["s_shape"] and np.isfinite(mr) and mr <= right:
+        if mode == "points" and z["s_shape"] and np.isfinite(mr) and mr <= right:
             yr = float(np.interp(mr, cx, cy))
-            # 原点と ROI 最大の点を結ぶ直線（傾き = 平均 ROI。この点で曲線に接する）
-            ax.plot([0, right], [0, yr / mr * right], color=MAXROI_COLOR, lw=1.0, ls=":", zorder=1)
+            ax.axvline(mr, color=MAXROI_COLOR, ls="--", lw=1.1, zorder=1)
             ax.scatter([mr], [yr], s=46, color=MAXROI_COLOR, zorder=5,
-                       label="max ROI (line from origin touches the curve)" if not labeled_roi else None)
+                       label="max ROI (contribution / spend)" if not labeled_roi else None)
             labeled_roi = True
         ax.set_title(f"{ch}  (S-shape)" if z["s_shape"] else ch, fontsize=10)
         ax.set_xlabel(f"weekly {xunit(ch)}", fontsize=8)
@@ -977,7 +979,14 @@ def build_report(path, *, cfg, summ, dec, pred, metrics, curves, decay, diagnost
                     return "曲線の範囲外"
                 return f"{act(v, ch)}（実績最大の {v / mx:.0%}）" + (" ※実績の範囲外" if v > mx else "")
             zc = zones["channel"]
+            zmax = [act(v, c) for v, c in zip(zones["max_weekly_spend"], zc)]
             zv = pd.DataFrame({
+                "チャネル": zones["channel"],
+                "最大効果の 1/3 に達する額": [_z(v, m, c) for v, m, c in zip(zones["spend_at_third"], zones["max_weekly_spend"], zc)],
+                "最大効果の 2/3 に達する額": [_z(v, m, c) for v, m, c in zip(zones["spend_at_two_thirds"], zones["max_weekly_spend"], zc)],
+                "実績の最大週次出稿額": zmax,
+            })
+            pv = pd.DataFrame({
                 "チャネル": zones["channel"],
                 "曲線の形": ["S 字" if s_ else "C 字" for s_ in zones["s_shape"]],
                 "限界ROI最大（変曲点）": [(_z(v, m, c) if s_ else "—（C 字は出稿 0 で最大）")
@@ -986,9 +995,7 @@ def build_report(path, *, cfg, summ, dec, pred, metrics, curves, decay, diagnost
                 "ROI最大": [(_z(v, m, c) if s_ else "—（C 字は出稿 0 で最大）")
                           for v, m, s_, c in zip(zones["max_roi"], zones["max_weekly_spend"],
                                                  zones["s_shape"], zc)],
-                "最大効果の 1/3 に達する額": [_z(v, m, c) for v, m, c in zip(zones["spend_at_third"], zones["max_weekly_spend"], zc)],
-                "最大効果の 2/3 に達する額": [_z(v, m, c) for v, m, c in zip(zones["spend_at_two_thirds"], zones["max_weekly_spend"], zc)],
-                "実績の最大週次出稿額": [act(v, c) for v, c in zip(zones["max_weekly_spend"], zc)],
+                "実績の最大週次出稿額": zmax,
             })
             weekly_html += (
                 '<h2>週次の飽和曲線と効率の 3 段階（最大効果の 1/3・2/3）</h2><p class="muted">'
@@ -998,15 +1005,22 @@ def build_report(path, *, cfg, summ, dec, pred, metrics, curves, decay, diagnost
                 '<b>薄い = 2/3〜（飽和が進み効率が落ちる部分）</b>。'
                 '左の破線が 1/3、右の破線が 2/3 の位置です。'
                 '「効率が最も良い部分まで出稿するなら 1/3 の線まで」「ほどほどの効率の範囲で最大限出すなら 2/3 の線まで」と読めます。'
-                '<b>S 字の媒体</b>（タイトルに S-shape）は出稿の最初のうち効きにくいため、0〜1/3 の前半は効率が良くありません。'
-                'S 字の媒体には 2 つの点を描いています。<b>緑の点（限界ROI最大＝変曲点、一点鎖線）</b>：曲線の傾きが最も急な点で、'
-                '追加の 1 円が最も効く出稿額。<b>青の点（ROI最大）</b>：原点から引いた直線（青の点線）が曲線に接する点で、'
-                '貢献 ÷ 出稿額（平均 ROI）が最も高くなる出稿額（平均 CPA が最も安くなる点でもあります）。'
-                'ROI最大の点は必ず変曲点より右にあり、「少なくとも ROI最大の点までは出稿しないと効率が出きらない」目安になります。'
-                'それを超えると平均 ROI は下がり始めます。C 字の媒体は、限界ROI・ROI とも出稿 0 で最大になるため点はありません。'
+                '<b>S 字の媒体</b>（タイトルに S-shape）は出稿の最初のうち効きにくいため、0〜1/3 の前半は効率が良くありません'
+                '（下の「限界ROI最大・ROI最大」のグラフも合わせて見てください）。'
                 '線の位置はグラフに描いた曲線（推定の中央値）から計算しています。毎週同じ額を出稿し続ける前提の値です。</p>'
-                + fig_efficiency_zones(weekly_curve, weekly_points, channels, zones)
-                + f'<div class="scroll">{_table(zv)}</div>')
+                + fig_efficiency_zones(weekly_curve, weekly_points, channels, zones, mode="zones")
+                + f'<div class="scroll">{_table(zv)}</div>'
+                + '<h2>週次の飽和曲線と効率が最も良い点（限界ROI最大・ROI最大）</h2><p class="muted">'
+                '信頼区間は表示していません。S 字の媒体に 2 本の縦線を引いています。'
+                '<b>緑の一点鎖線（限界ROI最大＝変曲点）</b>：曲線の傾きが最も急な点で、追加の 1 円が最も効く出稿額。'
+                '<b>青の破線（ROI最大）</b>：貢献 ÷ 出稿額（平均 ROI）が最も高くなる出稿額で、原点から引いた直線が曲線に接する点'
+                '（平均 CPA が最も安くなる点でもあります）。'
+                'ROI最大の線は必ず限界ROI最大の線より右にあり、「少なくとも ROI最大の線までは出稿しないと効率が出きらない」目安になります。'
+                'それを超えると平均 ROI は下がり始めます。'
+                'C 字の媒体は、限界ROI・ROI とも出稿 0 で最大になるため線はありません。'
+                '線の位置はグラフに描いた曲線（推定の中央値）から計算しています。毎週同じ額を出稿し続ける前提の値です。</p>'
+                + fig_efficiency_zones(weekly_curve, weekly_points, channels, zones, mode="points")
+                + f'<div class="scroll">{_table(pv)}</div>')
         weekly_app_html += ('<h2>週次の飽和曲線と実績（横軸＝adstock 後の出稿額）</h2><p class="muted">横軸 = その週に効いている出稿額'
                        '（adstock 適用後。過去の出稿の持ち越しを含み、単位は出稿額と同じ）、縦軸 = その週の貢献。'
                        f'線は推定した飽和曲線（帯は {IL} 区間）、〇は実績の各週。〇が曲線の平らな部分に多いほど、'
