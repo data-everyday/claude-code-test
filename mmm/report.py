@@ -80,6 +80,9 @@ def act(v, ch: str) -> str:
 
 def per_spend(roi: float, unit: str) -> str:
     """ROI（KPI ÷ 広告費）を「広告費 ○ あたり +△」の形に（△ が 1 以上になる最小の単位で）。"""
+    if _ROI_MULT[0] is not None:  # レポート全体でそろえた単位
+        m, jp, _ = roi_scale()
+        return f"広告費 {jp} あたり +{smart_num(roi * m)}{unit}"
     for mult, label in ((1, "1"), (1e3, "1,000"), (1e4, "1万"), (1e5, "10万"), (1e6, "100万"),
                         (1e7, "1,000万"), (1e8, "1億")):
         if roi * mult >= 1:
@@ -231,9 +234,30 @@ SPEND_MULTS = ((1, "1", "1"), (1e3, "1,000", "1K"), (1e4, "1万", "10K"), (1e5, 
                (1e6, "100万", "1M"), (1e7, "1,000万", "10M"), (1e8, "1億", "100M"))
 
 
-def roi_scale(roi_values) -> tuple[float, str, str]:
-    """ROI（KPI ÷ 広告費）が小さいとき、「広告費 M あたり」に換算する M を選ぶ（最大値が 1 以上になる最小の M）。"""
-    mx = float(np.nanmax(np.asarray(roi_values, dtype=float))) if len(roi_values) else 1.0
+_ROI_MULT: list = [None]  # レポート内で使う「広告費 M あたり」の M（build_report で決める）
+
+
+def roi_mult_from_data(total_kpi: float, total_spend: float) -> float:
+    """「広告費 M あたり」の M を、データ（KPI 合計 ÷ 広告費合計）だけから決める。
+    推定結果（事後の ROI）に依存させないので、同じデータなら事前分布などの設定を変えても単位がそろい、
+    レポート同士をそのまま比較できる。KPI 合計 ÷ 広告費合計 × M が 10 以上になる最小の M。"""
+    ratio = total_kpi / total_spend if total_spend > 0 else 1.0
+    for mult, _, _ in SPEND_MULTS:
+        if ratio * mult >= 10:
+            return mult
+    return SPEND_MULTS[-1][0]
+
+
+def roi_scale(roi_values=None) -> tuple[float, str, str]:
+    """ROI（KPI ÷ 広告費）を「広告費 M あたり」で表示するときの (M, 日本語ラベル, 英語ラベル)。
+    build_report で決めた M（設定 report.roi_per、なければデータから）を使う。未設定なら値の最大から決める。"""
+    if _ROI_MULT[0] is not None:
+        m = float(_ROI_MULT[0])
+        for mult, jp, en in SPEND_MULTS:
+            if mult == m:
+                return mult, jp, en
+        return m, f"{m:,.0f}", f"{m:,.0f}"
+    mx = float(np.nanmax(np.asarray(roi_values, dtype=float))) if roi_values is not None and len(roi_values) else 1.0
     for mult, jp, en in SPEND_MULTS:
         if mx * mult >= 1:
             return mult, jp, en
@@ -622,6 +646,7 @@ def build_report(path, *, cfg, summ, dec, pred, metrics, curves, decay, diagnost
     total_contrib = summ["contribution_mean"].sum()
     ad_share = total_contrib / total_kpi
     total_spend = summ["spend"].sum()
+    _ROI_MULT[0] = cfg.roi_per or roi_mult_from_data(float(total_kpi), float(total_spend))
     blended_roi = total_contrib / total_spend
     blended_cpa = total_spend / total_contrib if total_contrib > 0 else float("nan")
     weeks = len(dec)

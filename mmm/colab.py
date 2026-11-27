@@ -104,7 +104,7 @@ def build_config(*, csv_path: str, date_column: str, target_column: str, channel
                  budget_upper: float = 1.3, total_budget: float = 0,
                  output_dir: str = "mmm_output", interval: float = 0.95,
                  value_per_kpi: float = 0, gross_margin: float = 1.0,
-                 cpa_lines: list[float] | None = None, cpa_lines_auto: bool = True,
+                 cpa_lines: list[float] | None = None, cpa_lines_auto: bool = True, roi_per: float = 0,
                  cpa_lines_per_channel: str = "", saturation_default: str = "auto",
                  saturation_per_channel: str = "", minimize_spend: bool = True,
                  kpi_target_ratio: float = 1.0, **old_kwargs) -> dict:
@@ -177,6 +177,7 @@ def build_config(*, csv_path: str, date_column: str, target_column: str, channel
         "report": {"cpa_lines": [30000, 50000, 100000, 150000] if cpa_lines is None
                    else [float(x) for x in cpa_lines],
                    "cpa_lines_auto": bool(cpa_lines_auto),
+                   "roi_per": float(roi_per) if roi_per else None,
                    "cpa_lines_per_channel": {e["name"]: [float(x) for x in e["periods"]]
                                              for e in parse_custom_events(cpa_lines_per_channel)}},
         "economics": ({"value_per_kpi": float(value_per_kpi), "gross_margin": float(gross_margin)}
@@ -246,7 +247,7 @@ def build_forecast_plan(*, weeks: int, grp_channel: str = "", grp_column: str = 
 
 
 # Colab ノートブックの版（ノートブック側の版がこれより古いと ① で注意を出す）
-NOTEBOOK_VERSIONS = {"cx5": "2026-11-26e"}
+NOTEBOOK_VERSIONS = {"cx5": "2026-11-27a"}
 
 
 def check_notebook_version(kind: str, version: str) -> str | None:

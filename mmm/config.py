@@ -75,6 +75,7 @@ class Config:
     cpa_lines: list[float] = field(default_factory=lambda: [30000, 50000, 100000, 150000])
     cpa_lines_per_channel: dict[str, list[float]] = field(default_factory=dict)
     cpa_lines_auto: bool = True
+    roi_per: float | None = None  # ROI を「広告費 M あたり」で表示する M（None = データから自動）
     decomp_show_external: bool = True  # 貢献度分解に外部要因（コントロール・イベント）を分けて表示
     scenarios: list[dict[str, Any]] = field(default_factory=list)
 
@@ -162,6 +163,16 @@ def parse_default_roi(spec) -> dict[str, Any] | None:
     if not 0 < share < 1:
         raise ValueError("model.default_roi_prior.ad_share は 0〜1 の間（例: 0.2 = 20%）")
     return {"mode": "auto", "ad_share": share, "sd": sd}
+
+
+def _roi_per(v) -> float | None:
+    """report.roi_per: ROI の表示単位（広告費 M あたり）。auto / null = データから自動。"""
+    if v is None or (isinstance(v, str) and v.strip().lower() in ("", "auto")):
+        return None
+    v = float(v)
+    if v <= 0:
+        raise ValueError("report.roi_per は正の数（例: 1000000 = 広告費 100万 あたり）か auto")
+    return v
 
 
 def _economics(spec) -> dict[str, Any] | None:
@@ -392,6 +403,7 @@ def load_config(path: str | Path, overrides: dict[str, Any] | None = None) -> Co
         cpa_lines_per_channel={str(k): [float(x) for x in (v or []) if float(x) > 0]
                                for k, v in (_get(raw, "report.cpa_lines_per_channel", {}) or {}).items()},
         cpa_lines_auto=bool(_get(raw, "report.cpa_lines_auto", True)),
+        roi_per=_roi_per(_get(raw, "report.roi_per")),
         decomp_show_external=bool(_get(raw, "report.decomp_show_external", True)),
         scenarios=_get(raw, "scenarios", []) or [],
     )

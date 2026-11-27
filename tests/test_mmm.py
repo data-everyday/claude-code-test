@@ -773,3 +773,21 @@ def test_colab_channel_check():
     assert t.loc[0, "単位"] == "GRP" and t.loc[0, "ROI・CPA・最適化の金額の列"] == "TV CX-5 (On/After 2026-05-18)"
     assert not w
     assert check_notebook_version("cx5", "2026-01-01") and check_notebook_version("cx5", "2099-01-01") is None
+
+
+def test_roi_display_unit_from_data(tmp_path):
+    """ROI の表示単位は推定結果ではなくデータ（KPI 合計 ÷ 広告費合計）で決まり、設定で固定もできる。"""
+    from mmm.report import _ROI_MULT, per_spend, roi_mult_from_data, roi_scale
+
+    assert roi_mult_from_data(51_841, 4_010_592_147) == 1e6  # 来場者数 ÷ 広告費 ≈ 1.3e-5 → 100万あたり
+    assert roi_mult_from_data(1e9, 1e8) == 1  # 売上 ÷ 広告費 = 10 → 1 円あたり
+    _ROI_MULT[0] = 1e6
+    try:
+        assert roi_scale([1e-9])[1] == "100万" and roi_scale([1.0])[1] == "100万"  # 値によらず固定
+        assert per_spend(1.61e-6, "人") == "広告費 100万 あたり +1.61人"
+        assert per_spend(6.07e-7, "人") == "広告費 100万 あたり +0.607人"
+    finally:
+        _ROI_MULT[0] = None
+    cfg = load_config(_write_cfg(tmp_path, "report: {roi_per: 1000}"))
+    assert cfg.roi_per == 1000
+    assert load_config(_write_cfg(tmp_path, "report: {roi_per: auto}")).roi_per is None
