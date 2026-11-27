@@ -485,11 +485,22 @@ def _kpi_num(v: float) -> str:
     return f"{v:,.0f}" if a >= 100 else (f"{v:.1f}" if a >= 10 else f"{v:.2f}")
 
 
-def _mark_kpi(ax, x: float, y: float, color: str) -> None:
-    """曲線上の点の左上に、その点の KPI（縦軸の値）を書く（S 字曲線の左上は空いている）。"""
-    ax.annotate(_kpi_num(y), (x, y), xytext=(-6, 7), textcoords="offset points", ha="right", va="bottom",
-                fontsize=8, color=color, fontweight="bold",
-                bbox=dict(boxstyle="round,pad=0.15", fc="white", ec="none", alpha=0.8), zorder=6)
+def _x_num(x: float, ch: str) -> str:
+    """グラフ内に書く出稿量（GRP のチャネルは「○ GRP」、金額のチャネルはカンマ区切りの金額）。"""
+    u = _UNITS.get(ch)
+    if u:
+        return f"{x:,.1f} {u}" if x < 1000 else f"{x:,.0f} {u}"
+    return f"{x:,.0f}"
+
+
+def _mark_kpi(ax, x: float, y: float, color: str, ch: str) -> None:
+    """曲線上の点の左上に KPI（縦軸の値、黒字）、右下に出稿量（GRP / 金額、線の色）を書く。
+    S 字曲線の左上・右下は曲線から離れているので重なりにくい。"""
+    box = dict(boxstyle="round,pad=0.15", fc="white", ec="none", alpha=0.8)
+    ax.annotate(f"KPI={_kpi_num(y)}", (x, y), xytext=(-6, 7), textcoords="offset points", ha="right",
+                va="bottom", fontsize=8, color="#1d2330", fontweight="bold", bbox=box, zorder=6)
+    ax.annotate(_x_num(x, ch), (x, y), xytext=(6, -7), textcoords="offset points", ha="left",
+                va="top", fontsize=8, color=color, fontweight="bold", bbox=box, zorder=6)
 
 
 def fig_efficiency_zones(curve: pd.DataFrame, points: pd.DataFrame, chans: list[str],
@@ -538,7 +549,7 @@ def fig_efficiency_zones(curve: pd.DataFrame, points: pd.DataFrame, chans: list[
             yi = float(np.interp(xi, cx, cy))
             ax.scatter([xi], [yi], s=46, color=MROI_COLOR, zorder=5,
                        label="max marginal ROI (inflection point)" if not labeled else None)
-            _mark_kpi(ax, xi, yi, MROI_COLOR)
+            _mark_kpi(ax, xi, yi, MROI_COLOR, ch)
             labeled = True
         mr = z.get("max_roi", np.nan)
         if mode == "points" and z["s_shape"] and np.isfinite(mr) and mr <= right:
@@ -546,7 +557,7 @@ def fig_efficiency_zones(curve: pd.DataFrame, points: pd.DataFrame, chans: list[
             ax.axvline(mr, color=MAXROI_COLOR, ls="--", lw=1.1, zorder=1)
             ax.scatter([mr], [yr], s=46, color=MAXROI_COLOR, zorder=5,
                        label="max ROI (contribution / spend)" if not labeled_roi else None)
-            _mark_kpi(ax, mr, yr, MAXROI_COLOR)
+            _mark_kpi(ax, mr, yr, MAXROI_COLOR, ch)
             labeled_roi = True
         rb = z.get("roi_back", np.nan)
         if mode == "points" and z["s_shape"] and np.isfinite(rb):
@@ -559,7 +570,7 @@ def fig_efficiency_zones(curve: pd.DataFrame, points: pd.DataFrame, chans: list[
                 yb = float(np.interp(rb, cx, cy))
                 ax.scatter([rb], [yb], s=46, color=ROIBACK_COLOR, zorder=5,
                            label="ROI falls back to its level at max marginal ROI" if not labeled_back else None)
-                _mark_kpi(ax, rb, yb, ROIBACK_COLOR)
+                _mark_kpi(ax, rb, yb, ROIBACK_COLOR, ch)
             labeled_back = True
         ax.set_title(f"{ch}  (S-shape)" if z["s_shape"] else ch, fontsize=10)
         ax.set_xlabel(f"weekly {xunit(ch)}", fontsize=8)
@@ -1095,8 +1106,9 @@ def build_report(path, *, cfg, summ, dec, pred, metrics, curves, decay, diagnost
                 '<b>薄い青の範囲（緑の線〜オレンジの線）</b>は、平均 ROI が緑の線のときの水準以上に保たれる出稿額で、'
                 '途中の青の線で平均 ROI が最大になります。週次の出稿量をこの範囲に置くのが効率面での目安です。'
                 'C 字の媒体は、限界ROI・ROI とも出稿 0 で最大になるため線はありません。'
-                f'各点の横の数字は、その出稿量のときの{K}（縦軸の値＝毎週その量を出稿し続けたときの、1 週あたりの増分{K}。'
-                '持ち越し効果を含む）です。'
+                f'各点の左上（黒字、KPI=○）は、その出稿量のときの{K}（縦軸の値＝毎週その量を出稿し続けたときの、'
+                f'1 週あたりの増分{K}。持ち越し効果を含む）、右下（線と同じ色）は、その点の週次出稿量（GRP のチャネルは GRP、'
+                'それ以外は金額）です。'
                 '線の位置はグラフに描いた曲線（推定の中央値）から計算しています。毎週同じ額を出稿し続ける前提の値です。</p>'
                 + fig_efficiency_zones(weekly_curve, weekly_points, channels, zones, mode="points")
                 + f'<div class="scroll">{_table(pv)}</div>')
