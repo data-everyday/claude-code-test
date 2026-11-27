@@ -476,6 +476,7 @@ def fig_weekly_saturation(curve: pd.DataFrame, points: pd.DataFrame, chans: list
 
 MROI_COLOR = "#15803d"  # 限界 ROI 最大（変曲点）
 MAXROI_COLOR = "#1d4ed8"  # ROI 最大
+ROIBACK_COLOR = "#c2410c"  # ROI が変曲点の水準に戻る点（推奨範囲の上限）
 
 
 def fig_efficiency_zones(curve: pd.DataFrame, points: pd.DataFrame, chans: list[str],
@@ -487,7 +488,7 @@ def fig_efficiency_zones(curve: pd.DataFrame, points: pd.DataFrame, chans: list[
     cols = min(n, 3)
     rows = int(np.ceil(n / cols))
     fig, axes = plt.subplots(rows, cols, figsize=(4.2 * cols, 3.4 * rows), squeeze=False)
-    labeled = labeled_roi = False
+    labeled = labeled_roi = labeled_back = False
     for i, ch in enumerate(chans):
         ax = axes[i // cols][i % cols]
         color = PALETTE[i % len(PALETTE)]
@@ -498,8 +499,11 @@ def fig_efficiency_zones(curve: pd.DataFrame, points: pd.DataFrame, chans: list[
         xlim = pmax * 1.3
         if mode == "zones" and np.isfinite(x23):
             xlim = max(xlim, min(x23 * 1.1, pmax * 3))
-        if mode == "points" and z["s_shape"] and np.isfinite(z.get("max_roi", np.nan)):
-            xlim = max(xlim, min(float(z["max_roi"]) * 1.15, pmax * 3))
+        if mode == "points" and z["s_shape"]:
+            far = z.get("roi_back", np.nan)
+            far = far if np.isfinite(far) else z.get("max_roi", np.nan)
+            if np.isfinite(far):
+                xlim = max(xlim, min(float(far) * 1.12, pmax * 3))
         c = curve[(curve["channel"] == ch) & (curve["effective_spend"] <= xlim)]
         right = float(c["effective_spend"].max())
         # 背景: 0〜1/3（効率が良い）→ 1/3〜2/3（ほどほど）→ 2/3〜（飽和）の順に薄く
@@ -528,6 +532,17 @@ def fig_efficiency_zones(curve: pd.DataFrame, points: pd.DataFrame, chans: list[
             ax.scatter([mr], [yr], s=46, color=MAXROI_COLOR, zorder=5,
                        label="max ROI (contribution / spend)" if not labeled_roi else None)
             labeled_roi = True
+        rb = z.get("roi_back", np.nan)
+        if mode == "points" and z["s_shape"] and np.isfinite(rb):
+            xi = float(z["inflection"])
+            # 推奨範囲: 限界 ROI 最大（変曲点）〜 ROI が変曲点の水準に戻る点
+            ax.axvspan(xi, min(rb, right), color=MAXROI_COLOR, alpha=0.07, lw=0, zorder=0,
+                       label="suggested range" if not labeled_back else None)
+            if rb <= right:
+                ax.axvline(rb, color=ROIBACK_COLOR, ls=":", lw=1.4, zorder=1)
+                ax.scatter([rb], [float(np.interp(rb, cx, cy))], s=46, color=ROIBACK_COLOR, zorder=5,
+                           label="ROI falls back to its level at max marginal ROI" if not labeled_back else None)
+            labeled_back = True
         ax.set_title(f"{ch}  (S-shape)" if z["s_shape"] else ch, fontsize=10)
         ax.set_xlabel(f"weekly {xunit(ch)}", fontsize=8)
         ax.set_ylabel("contribution incl. carryover", fontsize=8)
@@ -535,9 +550,12 @@ def fig_efficiency_zones(curve: pd.DataFrame, points: pd.DataFrame, chans: list[
         ax.spines[["top", "right"]].set_visible(False)
     for j in range(n, rows * cols):
         axes[j // cols][j % cols].axis("off")
-    if labeled or labeled_roi:
-        fig.legend(loc="lower center", fontsize=8, frameon=False, bbox_to_anchor=(0.5, -0.02), ncol=2)
-        fig.tight_layout(rect=(0, 0.05, 1, 1))
+    if labeled or labeled_roi or labeled_back:
+        # 凡例は図の下に置き、行数に応じて下の余白を確保（x 軸ラベルと重ならないように）
+        n_items = sum([labeled, labeled_roi, labeled_back, labeled_back])
+        bottom = (0.05 if n_items <= 2 else 0.09) / max(rows, 1) ** 0.5
+        fig.tight_layout(rect=(0, bottom, 1, 1))
+        fig.legend(loc="lower center", fontsize=8, frameon=False, bbox_to_anchor=(0.5, 0.0), ncol=2)
     else:
         fig.tight_layout()
     return _img(fig)
@@ -1020,6 +1038,9 @@ def build_report(path, *, cfg, summ, dec, pred, metrics, curves, decay, diagnost
                 "ROI最大": [(_z(v, m, c) if s_ else "—（C 字は出稿 0 で最大）")
                           for v, m, s_, c in zip(zones["max_roi"], zones["max_weekly_spend"],
                                                  zones["s_shape"], zc)],
+                "ROIが変曲点の水準に戻る点（推奨範囲の上限）": [
+                    (_z(v, m, c) if s_ else "—")
+                    for v, m, s_, c in zip(zones["roi_back"], zones["max_weekly_spend"], zones["s_shape"], zc)],
                 "実績の最大週次出稿額": zmax,
             })
             weekly_html += (
@@ -1035,13 +1056,17 @@ def build_report(path, *, cfg, summ, dec, pred, metrics, curves, decay, diagnost
                 '線の位置はグラフに描いた曲線（推定の中央値）から計算しています。毎週同じ額を出稿し続ける前提の値です。</p>'
                 + fig_efficiency_zones(weekly_curve, weekly_points, channels, zones, mode="zones")
                 + f'<div class="scroll">{_table(zv)}</div>'
-                + '<h2>週次の飽和曲線と効率が最も良い点（限界ROI最大・ROI最大）</h2><p class="muted">'
-                '信頼区間は表示していません。S 字の媒体に 2 本の縦線を引いています。'
+                + '<h2>週次の飽和曲線と効率が最も良い点（限界ROI最大・ROI最大・推奨範囲）</h2><p class="muted">'
+                '信頼区間は表示していません。S 字の媒体に 3 本の縦線を引いています。'
                 '<b>緑の一点鎖線（限界ROI最大＝変曲点）</b>：曲線の傾きが最も急な点で、追加の 1 円が最も効く出稿額。'
                 '<b>青の破線（ROI最大）</b>：貢献 ÷ 出稿額（平均 ROI）が最も高くなる出稿額で、原点から引いた直線が曲線に接する点'
                 '（平均 CPA が最も安くなる点でもあります）。'
                 'ROI最大の線は必ず限界ROI最大の線より右にあり、「少なくとも ROI最大の線までは出稿しないと効率が出きらない」目安になります。'
                 'それを超えると平均 ROI は下がり始めます。'
+                '<b>オレンジの点線（推奨範囲の上限）</b>：ROI最大の点を過ぎて平均 ROI が下がり、'
+                '緑の線（限界ROI最大）のときの平均 ROI と同じ水準まで戻る出稿額。'
+                '<b>薄い青の範囲（緑の線〜オレンジの線）</b>は、平均 ROI が緑の線のときの水準以上に保たれる出稿額で、'
+                '途中の青の線で平均 ROI が最大になります。週次の出稿量をこの範囲に置くのが効率面での目安です。'
                 'C 字の媒体は、限界ROI・ROI とも出稿 0 で最大になるため線はありません。'
                 '線の位置はグラフに描いた曲線（推定の中央値）から計算しています。毎週同じ額を出稿し続ける前提の値です。</p>'
                 + fig_efficiency_zones(weekly_curve, weekly_points, channels, zones, mode="points")

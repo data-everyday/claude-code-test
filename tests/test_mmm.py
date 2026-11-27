@@ -655,8 +655,14 @@ def test_efficiency_zones(tmp_path):
             assert float(slope) == pytest.approx(float(curve_value(md, cp, i, mr)) / mr, rel=1e-3)
             grid = np.linspace(mr * 0.05, mr * 5, 400)
             assert np.argmax(curve_value(md, cp, i, grid) / grid) == pytest.approx(np.argmin(np.abs(grid - mr)), abs=2)
+            # 推奨範囲の上限: ROI 最大より右で、平均 ROI が変曲点での平均 ROI と同じになる
+            rb, xi = z.loc[i, "roi_back"], z.loc[i, "inflection"]
+            assert rb > mr
+            r_at = lambda x: float(curve_value(md, cp, i, x)) / x
+            assert r_at(rb) == pytest.approx(r_at(xi), rel=1e-4)
+            assert r_at(mr) > r_at(xi)
         else:
-            assert np.isnan(z.loc[i, "inflection"]) and np.isnan(z.loc[i, "max_roi"])
+            assert np.isnan(z.loc[i, "inflection"]) and np.isnan(z.loc[i, "max_roi"]) and np.isnan(z.loc[i, "roi_back"])
 
 
 def test_forecast(tmp_path):
