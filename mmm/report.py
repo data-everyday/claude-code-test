@@ -479,6 +479,19 @@ MAXROI_COLOR = "#1d4ed8"  # ROI 最大
 ROIBACK_COLOR = "#c2410c"  # ROI が変曲点の水準に戻る点（推奨範囲の上限）
 
 
+def _kpi_num(v: float) -> str:
+    """グラフ内に書く KPI の値（桁に応じて）。"""
+    a = abs(v)
+    return f"{v:,.0f}" if a >= 100 else (f"{v:.1f}" if a >= 10 else f"{v:.2f}")
+
+
+def _mark_kpi(ax, x: float, y: float, color: str) -> None:
+    """曲線上の点の左上に、その点の KPI（縦軸の値）を書く（S 字曲線の左上は空いている）。"""
+    ax.annotate(_kpi_num(y), (x, y), xytext=(-6, 7), textcoords="offset points", ha="right", va="bottom",
+                fontsize=8, color=color, fontweight="bold",
+                bbox=dict(boxstyle="round,pad=0.15", fc="white", ec="none", alpha=0.8), zorder=6)
+
+
 def fig_efficiency_zones(curve: pd.DataFrame, points: pd.DataFrame, chans: list[str],
                          zones: pd.DataFrame, mode: str = "zones") -> str:
     """信頼区間を描かないシンプルな週次飽和曲線。横軸 = その週の出稿額、縦軸 = 持ち越し込みの貢献。
@@ -522,8 +535,10 @@ def fig_efficiency_zones(curve: pd.DataFrame, points: pd.DataFrame, chans: list[
         if mode == "points" and z["s_shape"] and np.isfinite(z["inflection"]) and z["inflection"] <= right:
             xi = float(z["inflection"])
             ax.axvline(xi, color=MROI_COLOR, ls="-.", lw=1.1, zorder=1)
-            ax.scatter([xi], [np.interp(xi, cx, cy)], s=46, color=MROI_COLOR, zorder=5,
+            yi = float(np.interp(xi, cx, cy))
+            ax.scatter([xi], [yi], s=46, color=MROI_COLOR, zorder=5,
                        label="max marginal ROI (inflection point)" if not labeled else None)
+            _mark_kpi(ax, xi, yi, MROI_COLOR)
             labeled = True
         mr = z.get("max_roi", np.nan)
         if mode == "points" and z["s_shape"] and np.isfinite(mr) and mr <= right:
@@ -531,6 +546,7 @@ def fig_efficiency_zones(curve: pd.DataFrame, points: pd.DataFrame, chans: list[
             ax.axvline(mr, color=MAXROI_COLOR, ls="--", lw=1.1, zorder=1)
             ax.scatter([mr], [yr], s=46, color=MAXROI_COLOR, zorder=5,
                        label="max ROI (contribution / spend)" if not labeled_roi else None)
+            _mark_kpi(ax, mr, yr, MAXROI_COLOR)
             labeled_roi = True
         rb = z.get("roi_back", np.nan)
         if mode == "points" and z["s_shape"] and np.isfinite(rb):
@@ -540,8 +556,10 @@ def fig_efficiency_zones(curve: pd.DataFrame, points: pd.DataFrame, chans: list[
                        label="suggested range" if not labeled_back else None)
             if rb <= right:
                 ax.axvline(rb, color=ROIBACK_COLOR, ls=":", lw=1.4, zorder=1)
-                ax.scatter([rb], [float(np.interp(rb, cx, cy))], s=46, color=ROIBACK_COLOR, zorder=5,
+                yb = float(np.interp(rb, cx, cy))
+                ax.scatter([rb], [yb], s=46, color=ROIBACK_COLOR, zorder=5,
                            label="ROI falls back to its level at max marginal ROI" if not labeled_back else None)
+                _mark_kpi(ax, rb, yb, ROIBACK_COLOR)
             labeled_back = True
         ax.set_title(f"{ch}  (S-shape)" if z["s_shape"] else ch, fontsize=10)
         ax.set_xlabel(f"weekly {xunit(ch)}", fontsize=8)
@@ -1022,6 +1040,15 @@ def build_report(path, *, cfg, summ, dec, pred, metrics, curves, decay, diagnost
                     return "曲線の範囲外"
                 return f"{act(v, ch)}（実績最大の {v / mx:.0%}）" + (" ※実績の範囲外" if v > mx else "")
             zc = zones["channel"]
+
+            def _zk(v, mx, ch):
+                """出稿量に加えて、その点の KPI（週次の飽和曲線の値＝毎週その量を出稿したときの 1 週あたりの増分）。"""
+                txt = _z(v, mx, ch)
+                cv = weekly_curve[weekly_curve["channel"] == ch]
+                if np.isfinite(v) and len(cv) and v <= cv["effective_spend"].max():
+                    k_ = float(np.interp(v, cv["effective_spend"], cv["contribution_mean"]))
+                    txt += f" → {K} {_kpi_num(k_)}{U}"
+                return txt
             zmax = [act(v, c) for v, c in zip(zones["max_weekly_spend"], zc)]
             zv = pd.DataFrame({
                 "チャネル": zones["channel"],
@@ -1032,14 +1059,14 @@ def build_report(path, *, cfg, summ, dec, pred, metrics, curves, decay, diagnost
             pv = pd.DataFrame({
                 "チャネル": zones["channel"],
                 "曲線の形": ["S 字" if s_ else "C 字" for s_ in zones["s_shape"]],
-                "限界ROI最大（変曲点）": [(_z(v, m, c) if s_ else "—（C 字は出稿 0 で最大）")
+                "限界ROI最大（変曲点）": [(_zk(v, m, c) if s_ else "—（C 字は出稿 0 で最大）")
                                      for v, m, s_, c in zip(zones["inflection"], zones["max_weekly_spend"],
                                                             zones["s_shape"], zc)],
-                "ROI最大": [(_z(v, m, c) if s_ else "—（C 字は出稿 0 で最大）")
+                "ROI最大": [(_zk(v, m, c) if s_ else "—（C 字は出稿 0 で最大）")
                           for v, m, s_, c in zip(zones["max_roi"], zones["max_weekly_spend"],
                                                  zones["s_shape"], zc)],
                 "ROIが変曲点の水準に戻る点（推奨範囲の上限）": [
-                    (_z(v, m, c) if s_ else "—")
+                    (_zk(v, m, c) if s_ else "—")
                     for v, m, s_, c in zip(zones["roi_back"], zones["max_weekly_spend"], zones["s_shape"], zc)],
                 "実績の最大週次出稿額": zmax,
             })
@@ -1068,6 +1095,8 @@ def build_report(path, *, cfg, summ, dec, pred, metrics, curves, decay, diagnost
                 '<b>薄い青の範囲（緑の線〜オレンジの線）</b>は、平均 ROI が緑の線のときの水準以上に保たれる出稿額で、'
                 '途中の青の線で平均 ROI が最大になります。週次の出稿量をこの範囲に置くのが効率面での目安です。'
                 'C 字の媒体は、限界ROI・ROI とも出稿 0 で最大になるため線はありません。'
+                f'各点の横の数字は、その出稿量のときの{K}（縦軸の値＝毎週その量を出稿し続けたときの、1 週あたりの増分{K}。'
+                '持ち越し効果を含む）です。'
                 '線の位置はグラフに描いた曲線（推定の中央値）から計算しています。毎週同じ額を出稿し続ける前提の値です。</p>'
                 + fig_efficiency_zones(weekly_curve, weekly_points, channels, zones, mode="points")
                 + f'<div class="scroll">{_table(pv)}</div>')
