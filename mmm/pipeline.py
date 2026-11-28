@@ -64,6 +64,7 @@ def run(cfg: Config) -> dict:
     cpa_df = (analysis.cpa_levels(md, mmm, fit, cfg.cpa_lines, cfg.cpa_lines_per_channel,
                                   auto=cfg.cpa_lines_auto)
               if (cfg.cpa_lines or cfg.cpa_lines_per_channel or cfg.cpa_lines_auto) else None)
+    sat_table = analysis.saturation_table(md, mmm, fit, zones, step=cfg.saturation_table_step)
     wk_curve, wk_points = analysis.weekly_saturation(md, mmm, fit, optimal=opt_line,
                                                      sat_levels=sat_levels)
     base = analysis.baseline_components(md, fit)
@@ -109,6 +110,11 @@ def run(cfg: Config) -> dict:
     wk_points.to_csv(out / "weekly_saturation_points.csv", index=False)
     sat_levels.to_csv(out / "saturation_levels.csv", index=False)
     zones.to_csv(out / "efficiency_zones.csv", index=False)
+    # 「毎週 ○ GRP（○ 円）出稿したら 1 週あたり何 KPI」の早見表（全チャネル + チャネル別。Excel で開けるよう BOM 付き）
+    sat_table.to_csv(out / "saturation_table.csv", index=False, encoding="utf-8-sig")
+    for ch in sat_table["チャネル"].unique():
+        analysis.saturation_table_for_channel(sat_table, ch).to_csv(
+            out / f"saturation_table_{ch}.csv", index=False, encoding="utf-8-sig")
     if cpa_df is not None:
         cpa_df.to_csv(out / "cpa_levels.csv", index=False)
     if opt_line is not None:

@@ -513,6 +513,88 @@ def _nice_values(lo: float, hi: float, n: int = 4) -> list[float]:
     return [float(c) for c in cands[idx]]
 
 
+def _nice_step(span: float, max_rows: int = 50) -> float:
+    """0〜span を max_rows 行以内で刻む、きりのよい間隔（1, 2, 2.5, 5 × 10^k）。"""
+    if span <= 0:
+        return 1.0
+    raw = span / max_rows
+    k = 10.0 ** np.floor(np.log10(raw))
+    for m in (1, 2, 2.5, 5, 10):
+        if m * k >= raw:
+            return float(m * k)
+    return float(10 * k)
+
+
+def saturation_table(md: ModelData, mmm: BayesianMMM, fit: FitResult, zones: pd.DataFrame | None = None,
+                     step: dict | None = None, max_ratio: float = 2.0, n_draws: int = CURVE_DRAWS
+                     ) -> pd.DataFrame:
+    """週次の飽和曲線から「毎週 ○ GRP（○ 円）出稿したら、1 週あたり何 KPI 増えるか」の早見表。
+
+    レポートの飽和曲線・各点（限界ROI最大・ROI最大・推奨範囲の上限）と同じ曲線（推定の中央値をなめらかにしたもの）
+    から計算する。区間は事後サンプルごとの曲線の分位点。毎週同じ量を出稿し続けた定常状態での、持ち越し効果を含む
+    1 週あたりの増分。横軸はモデルの入力の単位（GRP のチャネルは GRP、それ以外は金額）で、
+    0 から 実績の最大週次出稿量 × max_ratio まで（推奨範囲の上限がそれより右ならそこまで）をきりのよい刻みで。
+    step: {チャネル名: 刻み}（省略時は自動で 50 行程度）。
+    """
+    p = subsample(fit.posterior, n_draws)
+    lo_q, hi_q = interval_bounds()
+    zones = zones if zones is not None else efficiency_zones(md, mmm, fit, n_draws)
+    step = step or {}
+    rows = []
+    for i, ch in enumerate(md.channel_names):
+        unit = md.units[i] or "円"
+        cpu = float(md.cpu[i])
+        scale = md.spend_scale[i]
+        actual_max = float(md.spend[:, i].max())
+        z = zones.loc[zones["channel"] == ch].iloc[0]
+        marks = {}
+        if z["s_shape"]:
+            marks = {"限界ROI最大（変曲点）": z["inflection"], "ROI最大": z["max_roi"],
+                     "推奨範囲の上限（ROIが変曲点の水準に戻る点）": z.get("roi_back", np.nan)}
+        xmax = actual_max * max_ratio
+        if np.isfinite(marks.get("推奨範囲の上限（ROIが変曲点の水準に戻る点）", np.nan)):
+            xmax = max(xmax, float(marks["推奨範囲の上限（ROIが変曲点の水準に戻る点）"]) * 1.1)
+        st = float(step.get(ch) or _nice_step(xmax))
+        grid = np.arange(0, xmax + st * 0.5, st)
+        label = [""] * len(grid)
+        for name, xv in marks.items():  # 各点の行も入れる
+            if np.isfinite(xv):
+                grid = np.append(grid, float(xv))
+                label.append(name)
+        order = np.argsort(grid, kind="stable")
+        grid, label = grid[order], [label[j] for j in order]
+        b, k, s_ = curve_params(md, mmm, fit, i, n_draws)
+        kpi = curve_value(md, (b, k, s_), i, grid)
+        u = grid / scale
+        draws = (hill_np(np.broadcast_to(u[None, :, None], (len(p["beta"]), len(u), 1)),
+                         p["K"][:, i:i + 1], p["S"][:, i:i + 1])[:, :, 0] * p["beta"][:, i:i + 1] * md.y_scale)
+        lo, hi = np.quantile(draws, lo_q, axis=0), np.quantile(draws, hi_q, axis=0)
+        with np.errstate(divide="ignore", invalid="ignore"):
+            marg = b * md.y_scale * _hill_marginal(np.maximum(u, 1e-12), np.array(k), np.array(s_)) / scale
+        cost = grid * cpu
+        for j in range(len(grid)):
+            rows.append({
+                "チャネル": ch, "単位": unit, "点": label[j],
+                "週次出稿量": grid[j],
+                "週次出稿金額（円）": cost[j],
+                "週あたりの増分KPI（中央値）": kpi[j],
+                "下限": float(lo[j]), "上限": float(hi[j]),
+                "平均CPA（円／KPI）": cost[j] / kpi[j] if kpi[j] > 0 else np.nan,
+                "平均ROI（KPI／100万円）": kpi[j] / cost[j] * 1e6 if cost[j] > 0 else np.nan,
+                "追加1単位あたりの増分KPI": float(marg[j]) if grid[j] > 0 else np.nan,
+                "限界ROI（KPI／追加100万円）": float(marg[j]) / cpu * 1e6 if grid[j] > 0 else np.nan,
+                "実績の範囲内": bool(grid[j] <= actual_max),
+            })
+    return pd.DataFrame(rows)
+
+
+def saturation_table_for_channel(table: pd.DataFrame, ch: str) -> pd.DataFrame:
+    """早見表のうち 1 チャネル分。列名に単位を入れる（例: 週次出稿量（GRP）、追加1GRPあたりの増分KPI）。"""
+    d = table[table["チャネル"] == ch].copy()
+    u = d["単位"].iloc[0] if len(d) else ""
+    return d.rename(columns={"週次出稿量": f"週次出稿量（{u}）", "追加1単位あたりの増分KPI": f"追加1{u}あたりの増分KPI"})
+
+
 def cpa_levels(md: ModelData, mmm: BayesianMMM, fit: FitResult, thresholds,
                per_channel: dict | None = None, auto: bool = True,
                n_draws: int = CURVE_DRAWS, n_grid: int = 1000, max_ratio: float = 5.0,

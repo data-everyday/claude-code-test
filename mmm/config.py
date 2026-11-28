@@ -75,6 +75,7 @@ class Config:
     cpa_lines: list[float] = field(default_factory=lambda: [30000, 50000, 100000, 150000])
     cpa_lines_per_channel: dict[str, list[float]] = field(default_factory=dict)
     cpa_lines_auto: bool = True
+    saturation_table_step: dict[str, float] = field(default_factory=dict)  # 早見表の刻み {チャネル: 刻み}
     roi_per: float | None = None  # ROI を「広告費 M あたり」で表示する M（None = データから自動）
     decomp_show_external: bool = True  # 貢献度分解に外部要因（コントロール・イベント）を分けて表示
     scenarios: list[dict[str, Any]] = field(default_factory=list)
@@ -404,6 +405,8 @@ def load_config(path: str | Path, overrides: dict[str, Any] | None = None) -> Co
                                for k, v in (_get(raw, "report.cpa_lines_per_channel", {}) or {}).items()},
         cpa_lines_auto=bool(_get(raw, "report.cpa_lines_auto", True)),
         roi_per=_roi_per(_get(raw, "report.roi_per")),
+        saturation_table_step={str(k): float(v) for k, v in
+                               (_get(raw, "report.saturation_table_step", {}) or {}).items() if v},
         decomp_show_external=bool(_get(raw, "report.decomp_show_external", True)),
         scenarios=_get(raw, "scenarios", []) or [],
     )

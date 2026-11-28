@@ -797,3 +797,41 @@ def test_roi_display_unit_from_data(tmp_path):
     cfg = load_config(_write_cfg(tmp_path, "report: {roi_per: 1000}"))
     assert cfg.roi_per == 1000
     assert load_config(_write_cfg(tmp_path, "report: {roi_per: auto}")).roi_per is None
+
+
+def test_saturation_table_grp(tmp_path):
+    """GRP→KPI の早見表: 曲線と一致し、金額 = GRP × 1GRP の費用、各点の行を含む。"""
+    from mmm.analysis import (curve_params, curve_value, efficiency_zones, saturation_table,
+                              saturation_table_for_channel)
+
+    path = _write_cfg(tmp_path)
+    df = pd.read_csv(tmp_path / "d.csv")
+    df["tv_grp"] = df["tv_spend"] / 250.0
+    df.to_csv(tmp_path / "d.csv", index=False)
+    path.write_text(path.read_text().replace(
+        "{name: tv, column: tv_spend, adstock: delayed, roi_prior: {median: 1.5, sd: 0.5}}",
+        "{name: tv, column: tv_grp, spend_column: tv_spend, adstock: delayed}")
+        + "report: {saturation_table_step: {tv: 0.5}}\n")
+    cfg = load_config(path)
+    assert cfg.saturation_table_step == {"tv": 0.5}
+    md = build_model_data(validate_dataframe(df, cfg), cfg)
+    mmm = BayesianMMM(cfg, md)
+    fit = mmm.fit()
+    z = efficiency_zones(md, mmm, fit)
+    t = saturation_table(md, mmm, fit, z, step=cfg.saturation_table_step)
+    tv = saturation_table_for_channel(t, "tv")
+    assert (tv["単位"] == "GRP").all() and "追加1GRPあたりの増分KPI" in tv.columns
+    grid = tv.loc[tv["点"] == "", "週次出稿量（GRP）"].to_numpy()
+    np.testing.assert_allclose(np.diff(grid), 0.5)  # 指定の刻み
+    np.testing.assert_allclose(tv["週次出稿金額（円）"], tv["週次出稿量（GRP）"] * 250.0, rtol=1e-6)
+    cp = curve_params(md, mmm, fit, 0)
+    np.testing.assert_allclose(tv["週あたりの増分KPI（中央値）"], curve_value(md, cp, 0, tv["週次出稿量（GRP）"]), rtol=1e-9)
+    assert (tv["下限"] <= tv["上限"]).all()
+    assert np.all(np.diff(tv["週あたりの増分KPI（中央値）"].to_numpy()) >= -1e-9)  # 出稿を増やすほど増える
+    if z.loc[0, "s_shape"]:
+        assert set(tv["点"]) >= {"限界ROI最大（変曲点）", "ROI最大"}
+        mr = tv.loc[tv["点"] == "ROI最大", "週次出稿量（GRP）"].iloc[0]
+        assert mr == pytest.approx(z.loc[0, "max_roi"])
+    other = saturation_table_for_channel(t, "search")
+    assert (other["単位"] == "円").all() and "週次出稿量（円）" in other.columns
+    assert not tv.isna().all().any()  # 他の単位の空の列がない

@@ -271,6 +271,7 @@ economics:
 | `holdout_metrics.csv` | ホールドアウト検証結果 |
 | `response_curves.csv` | 期間合計の応答曲線（支出 0〜2 倍） |
 | `weekly_saturation_curve.csv` / `weekly_saturation_points.csv` | 週次の飽和曲線と実績各週の点（adstock 後の出稿額 → 週の貢献） |
+| `saturation_table.csv` / `saturation_table_<チャネル>.csv` | 出稿量→KPI 早見表。毎週 ○ GRP（○ 円）出稿したときの 1 週あたりの増分 KPI（中央値・区間）、金額、平均 CPA・ROI、限界 ROI。限界ROI最大・ROI最大・推奨範囲の上限の行を含む。刻みは `report.saturation_table_step: {tv: 10}`（省略時は自動）。Excel で開けるよう BOM 付き UTF-8 |
 | `adstock_decay.csv` | ラグ別 adstock 重み |
 | `baseline_components.csv` | ベースラインの内訳（切片+トレンド・季節性・コントロール） |
 | `budget_optimization.csv` | ① 予算を変えずに KPI を最大化する配分 |
